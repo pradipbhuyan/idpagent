@@ -717,27 +717,32 @@ def render_invoice_result(result):
 
     data = st.session_state.get("structured_data", {}) or {}
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Vendor", str(data.get("vendor") or data.get("supplier") or "-"))
-    c2.metric("Invoice No", str(data.get("invoice_number") or data.get("invoice_no") or "-"))
-    c3.metric("Date", str(data.get("invoice_date") or "-"))
-    c4.metric("Total", str(data.get("total") or "-"))
-
+    c1.markdown(f"**Vendor**  \n<small>{str(data.get('vendor') or data.get('supplier') or '-')}</small>", unsafe_allow_html=True)
+    c2.markdown(f"**Invoice No**  \n<small>{str(data.get('invoice_number') or data.get('invoice_no') or '-')}</small>", unsafe_allow_html=True)
+    c3.markdown(f"**Date**  \n<small>{str(data.get('invoice_date') or '-')}</small>", unsafe_allow_html=True)
+    c4.markdown(f"**Total**  \n<small>{str(data.get('total') or '-')}</small>", unsafe_allow_html=True)
+    
     st.markdown("#### Concur Delivery")
     c5, c6, c7 = st.columns(3)
-    c5.metric("Status", str(result.get("concur_status", "-")).title())
-    c6.metric("Mode", str(result.get("concur_mode", "-")).upper())
-    c7.metric("Submission ID", str(result.get("concur_submission_id", "-")))
-
-    st.caption(
-        f"Endpoint: {result.get('concur_endpoint', '-')} | "
-        f"Batch ID: {result.get('concur_batch_id', '-')} | "
-        f"Document ID: {result.get('concur_document_id', '-')}"
+    c5.markdown(f"**Status**  \n<small>{str(result.get('concur_status', '-')).title()}</small>", unsafe_allow_html=True)
+    c6.markdown(f"**Mode**  \n<small>{str(result.get('concur_mode', '-')).upper()}</small>", unsafe_allow_html=True)
+    c7.markdown(f"**Submission ID**  \n<small>{str(result.get('concur_submission_id', '-'))}</small>", unsafe_allow_html=True)
+    
+    st.markdown(
+        f"<small><b>Endpoint:</b> {result.get('concur_endpoint', '-')} | "
+        f"<b>Batch ID:</b> {result.get('concur_batch_id', '-')} | "
+        f"<b>Document ID:</b> {result.get('concur_document_id', '-')}</small>",
+        unsafe_allow_html=True
     )
-    st.caption(
-        f"Submitted At: {result.get('concur_submitted_at', '-')} | "
-        f"Processing: {result.get('concur_processing_state', '-')}"
+    st.markdown(
+        f"<small><b>Submitted At:</b> {result.get('concur_submitted_at', '-')} | "
+        f"<b>Processing:</b> {result.get('concur_processing_state', '-')}</small>",
+        unsafe_allow_html=True
     )
-    st.caption(f"Next Status: {result.get('concur_next_status', '-')}")
+    st.markdown(
+        f"<small><b>Next Status:</b> {result.get('concur_next_status', '-')}</small>",
+        unsafe_allow_html=True
+    )
     
     excel = result.get("excel")
     if excel:
