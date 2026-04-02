@@ -722,10 +722,23 @@ def render_invoice_result(result):
     c3.metric("Date", str(data.get("invoice_date") or "-"))
     c4.metric("Total", str(data.get("total") or "-"))
 
-    concur_status = result.get("concur_status", "-")
-    concur_mode = result.get("concur_mode", "-")
-    st.caption(f"Concur Status: {concur_status} | Mode: {concur_mode}")
+    st.markdown("#### Concur Delivery")
+    c5, c6, c7 = st.columns(3)
+    c5.metric("Status", str(result.get("concur_status", "-")).title())
+    c6.metric("Mode", str(result.get("concur_mode", "-")).upper())
+    c7.metric("Submission ID", str(result.get("concur_submission_id", "-")))
 
+    st.caption(
+        f"Endpoint: {result.get('concur_endpoint', '-')} | "
+        f"Batch ID: {result.get('concur_batch_id', '-')} | "
+        f"Document ID: {result.get('concur_document_id', '-')}"
+    )
+    st.caption(
+        f"Submitted At: {result.get('concur_submitted_at', '-')} | "
+        f"Processing: {result.get('concur_processing_state', '-')}"
+    )
+    st.caption(f"Next Status: {result.get('concur_next_status', '-')}")
+    
     excel = result.get("excel")
     if excel:
         st.download_button(
@@ -754,10 +767,23 @@ def render_ticket_result(result):
     c3.metric("Route", f"{data.get('from', '-')}" + " → " + f"{data.get('to', '-')}")
     c4.metric("Amount", str(data.get("amount") or "-"))
 
-    concur_status = result.get("concur_status", "-")
-    concur_mode = result.get("concur_mode", "-")
-    st.caption(f"Concur Status: {concur_status} | Mode: {concur_mode}")
+    st.markdown("#### Concur Delivery")
+    c5, c6, c7 = st.columns(3)
+    c5.metric("Status", str(result.get("concur_status", "-")).title())
+    c6.metric("Mode", str(result.get("concur_mode", "-")).upper())
+    c7.metric("Submission ID", str(result.get("concur_submission_id", "-")))
 
+    st.caption(
+        f"Endpoint: {result.get('concur_endpoint', '-')} | "
+        f"Batch ID: {result.get('concur_batch_id', '-')} | "
+        f"Document ID: {result.get('concur_document_id', '-')}"
+    )
+    st.caption(
+        f"Submitted At: {result.get('concur_submitted_at', '-')} | "
+        f"Processing: {result.get('concur_processing_state', '-')}"
+    )
+    st.caption(f"Next Status: {result.get('concur_next_status', '-')}")
+    
     payload = result.get("payload")
     if payload:
         with st.expander("Concur Payload", expanded=True):
@@ -889,11 +915,18 @@ def render_details_section():
         if st.session_state.get("doc_type") in ["invoice", "ticket"]:
             st.write(f"Status: {result.get('concur_status', 'not sent')}")
             st.write(f"Mode: {result.get('concur_mode', '-')}")
+            st.write(f"Submission ID: {result.get('concur_submission_id', '-')}")
+            st.write(f"Batch ID: {result.get('concur_batch_id', '-')}")
+            st.write(f"Document ID: {result.get('concur_document_id', '-')}")
+            st.write(f"Submitted At: {result.get('concur_submitted_at', '-')}")
+            st.write(f"Endpoint: {result.get('concur_endpoint', '-')}")
+            st.write(f"Processing State: {result.get('concur_processing_state', '-')}")
+            st.write(f"Next Status: {result.get('concur_next_status', '-')}")
             if result.get("payload"):
                 st.json(result["payload"])
         else:
             st.caption("Concur delivery applies only to invoice and ticket")
-
+            
     with st.expander("Document Chat", expanded=False):
         render_chat_section()
 
