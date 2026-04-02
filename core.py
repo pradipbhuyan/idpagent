@@ -1,61 +1,44 @@
 import json
 import re
 from io import BytesIO
+from pathlib import Path
+import tempfile
+
+import pandas as pd
 from docx import Document as DocxDocument
 from langchain_openai import ChatOpenAI
 from streamlit import session_state as st_state
-import pandas as pd
-
-import tempfile
-from pathlib import Path
 
 
 def safe_json_parse(text):
-    """
-    Safely parse LLM JSON output.
-    Handles:
-    - trailing commas
-    - partial JSON
-    - text before/after JSON
-    """
-
     if not text:
         return {}
 
-    # Remove markdown wrappers if any
     text = text.strip().replace("```json", "").replace("```", "").strip()
 
-    # Try direct parse first
     try:
         return json.loads(text)
-    except:
+    except Exception:
         pass
 
-    # Try to extract JSON block
     try:
         match = re.search(r"\{.*\}", text, re.DOTALL)
         if match:
             return json.loads(match.group())
-    except:
+    except Exception:
         pass
 
-    # Fix common trailing comma issue
     try:
         text_fixed = re.sub(r",\s*}", "}", text)
         text_fixed = re.sub(r",\s*]", "]", text_fixed)
         return json.loads(text_fixed)
-    except:
+    except Exception:
         pass
 
-    # Final fallback
     return {"raw_output": text}
 
-def extract_structured_json(text, doc_type):
-    """
-    Extract structured JSON from document text.
-    For resumes, this version explicitly preserves all date fields.
-    """
 
+def extract_structured_json(text, doc_type):
     clean_text = re.sub(r"[^\x00-\x7F]+", " ", text or "")
     clean_text = clean_text.replace("{", "").replace("}", "").strip()
 
@@ -146,22 +129,71 @@ STRICT RULES:
 CV TEXT:
 {clean_text[:12000]}
 """
-    else:
+    elif doc_type == "invoice":
         prompt = f"""
-Extract ALL possible key-value pairs from the document.
+You are a strict JSON extractor.
 
 Return ONLY valid JSON.
+No markdown.
+No explanation.
+
+Extract all identifiable invoice fields such as:
+- vendor
+- supplier
+- invoice_number
+- invoice_no
+- invoice_date
+- due_date
+- currency
+- subtotal
+- tax
+- total
+- billing_address
+- shipping_address
+- purchase_order
+- line_items
 
 RULES:
-- Capture every identifiable field
-- Preserve original field names where possible
-- Include nested structures if present
-- Do NOT summarize
-- Do NOT skip fields
+- Preserve values exactly where possible
+- Use arrays/objects where clearly present
+- Do not summarize
+- Do not invent fields not supported by the document
 
 DOCUMENT TEXT:
 {clean_text[:12000]}
 """
+    elif doc_type == "ticket":
+        prompt = f"""
+You are a strict JSON extractor.
+
+Return ONLY valid JSON.
+No markdown.
+No explanation.
+
+Extract all identifiable travel ticket or expense fields such as:
+- traveler_name
+- ticket_number
+- booking_reference
+- airline
+- from
+- to
+- departure_date
+- return_date
+- amount
+- currency
+- class
+- trip_type
+
+RULES:
+- Preserve values exactly where possible
+- Do not summarize
+- Do not invent unsupported values
+
+DOCUMENT TEXT:
+{clean_text[:12000]}
+"""
+    else:
+        return {}
 
     try:
         response = llm.invoke(prompt).content.strip()
@@ -180,7 +212,6 @@ DOCUMENT TEXT:
             parsed = {"data": parsed}
 
         if doc_type == "resume":
-            # fallback name
             if not parsed.get("name"):
                 try:
                     name_prompt = f"""
@@ -195,7 +226,6 @@ No explanation.
                 except Exception:
                     parsed["name"] = "Candidate"
 
-            # normalize top-level fields
             for field in [
                 "name", "email", "phone", "location", "linkedin", "summary"
             ]:
@@ -206,7 +236,6 @@ No explanation.
                 if field not in parsed or parsed[field] is None:
                     parsed[field] = []
 
-            # normalize education entries
             normalized_education = []
             for edu in parsed.get("education", []):
                 if isinstance(edu, dict):
@@ -222,7 +251,6 @@ No explanation.
                     })
             parsed["education"] = normalized_education
 
-            # normalize experience entries
             normalized_experience = []
             for exp in parsed.get("experience", []):
                 if isinstance(exp, dict):
@@ -237,7 +265,6 @@ No explanation.
                     })
             parsed["experience"] = normalized_experience
 
-            # normalize certifications
             normalized_certifications = []
             for cert in parsed.get("certifications", []):
                 if isinstance(cert, dict):
@@ -249,7 +276,6 @@ No explanation.
                     })
             parsed["certifications"] = normalized_certifications
 
-            # normalize projects
             normalized_projects = []
             for proj in parsed.get("projects", []):
                 if isinstance(proj, dict):
@@ -275,11 +301,6 @@ No explanation.
 
 
 def generate_resume_summary(data):
-    """
-    Generate a concise professional summary, while preserving career timeline references.
-    This does not replace detailed experience/education sections; it only builds a top summary.
-    """
-
     if "api_key" not in st_state:
         return "Summary not available"
 
@@ -314,13 +335,6 @@ CANDIDATE DATA:
 
 
 def build_resume(data, template_file):
-    """
-    Build resume DOCX with structured sections that preserve all dates end-to-end.
-    Expected placeholders in template can include:
-    {{name}}, {{email}}, {{phone}}, {{location}}, {{linkedin}}, {{summary}},
-    {{skills}}, {{experience}}, {{education}}, {{certifications}}, {{projects}}
-    """
-
     def safe_str(value):
         return "" if value is None else str(value)
 
@@ -410,11 +424,7 @@ def build_resume(data, template_file):
             if first_line_parts:
                 lines.append(" - ".join(first_line_parts))
 
-            date_text = ""
-            if graduation_date:
-                date_text = graduation_date
-            else:
-                date_text = format_date_range(start_date, end_date)
+            date_text = graduation_date if graduation_date else format_date_range(start_date, end_date)
 
             second_line_parts = []
             if date_text:
@@ -523,24 +533,20 @@ def build_resume(data, template_file):
                     for para in cell.paragraphs:
                         replace_placeholders_in_paragraph(para, placeholders)
 
-        # headers/footers
         for section in doc.sections:
             for para in section.header.paragraphs:
                 replace_placeholders_in_paragraph(para, placeholders)
             for para in section.footer.paragraphs:
                 replace_placeholders_in_paragraph(para, placeholders)
 
-    # generate summary
     summary = generate_resume_summary(data)
 
-    # load template safely
     if not template_file:
         raise ValueError("No template file provided")
-    
+
     try:
         if isinstance(template_file, bytes):
             doc = DocxDocument(BytesIO(template_file))
-    
         elif hasattr(template_file, "read"):
             content = template_file.read()
             if not content:
@@ -548,17 +554,13 @@ def build_resume(data, template_file):
             if hasattr(template_file, "seek"):
                 template_file.seek(0)
             doc = DocxDocument(BytesIO(content))
-    
         elif isinstance(template_file, str):
             doc = DocxDocument(template_file)
-    
         else:
             raise TypeError(f"Unsupported template_file type: {type(template_file)}")
-    
     except Exception as e:
         raise RuntimeError(f"Template load failed: {e}")
-    
-    # prepare structured placeholders with preserved dates
+
     placeholders = {
         "{{name}}": safe_str(data.get("name", "")),
         "{{email}}": safe_str(data.get("email", "")),
@@ -579,17 +581,15 @@ def build_resume(data, template_file):
     doc.save(buffer)
     return buffer.getvalue()
 
+
 def save_temp_file(uploaded_file):
     suffix = Path(uploaded_file.name).suffix
     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
         tmp.write(uploaded_file.getvalue())
         return tmp.name
 
-def detect_document_type(text):
 
-    # ------------------------------
-    # SAFETY CHECK
-    # ------------------------------
+def detect_document_type(text):
     if "api_key" not in st_state:
         return "other"
 
@@ -622,10 +622,11 @@ STRICT RULES:
     except Exception:
         return "other"
 
-    # ------------------------------
-    # ROBUST MATCHING
-    # ------------------------------
-    labels = ["resume", "invoice", "receipt", "report", "ticket"]
+    labels = ["resume", "invoice", "receipt", "report", "ticket", "other"]
+
+    for label in labels:
+        if label == raw:
+            return label
 
     for label in labels:
         if label in raw:
@@ -633,18 +634,8 @@ STRICT RULES:
 
     return "other"
 
-# Resume helpers
-def replace_placeholders(doc, placeholders):
-
-    for para in doc.paragraphs:
-        for key, value in placeholders.items():
-            if key in para.text:
-                para.text = para.text.replace(key, str(value))
-
 
 def json_to_kv_dataframe(data):
-    import pandas as pd
-
     rows = []
 
     def flatten(prefix, obj):
@@ -666,6 +657,6 @@ def json_to_kv_dataframe(data):
 
 def generate_excel(df):
     output = BytesIO()
-    with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        df.to_excel(writer, index=False, sheet_name='data')
+    with pd.ExcelWriter(output, engine="openpyxl") as writer:
+        df.to_excel(writer, index=False, sheet_name="data")
     return output.getvalue()
