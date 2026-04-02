@@ -201,6 +201,13 @@ def invoice_node(state: IDPState) -> IDPState:
             "payload": concur_result.get("payload"),
             "concur_status": concur_result.get("status"),
             "concur_mode": concur_result.get("mode"),
+            "concur_submission_id": concur_result.get("submission_id"),
+            "concur_batch_id": concur_result.get("batch_id"),
+            "concur_document_id": concur_result.get("document_id"),
+            "concur_submitted_at": concur_result.get("submitted_at"),
+            "concur_endpoint": concur_result.get("endpoint"),
+            "concur_processing_state": concur_result.get("processing_state"),
+            "concur_next_status": concur_result.get("next_status"),
             "message": concur_result.get("message", "Invoice processed successfully")
         }
 
@@ -213,6 +220,7 @@ def invoice_node(state: IDPState) -> IDPState:
             "excel": None,
             "data": data,
             "concur_status": "error",
+            "concur_mode": "mock",
             "message": str(e)
         }
         add_step_metric(state, "Create invoice output + send to Concur", started_at, before, str(e))
@@ -239,6 +247,13 @@ def ticket_node(state: IDPState) -> IDPState:
             "payload": concur_result.get("payload"),
             "concur_status": concur_result.get("status"),
             "concur_mode": concur_result.get("mode"),
+            "concur_submission_id": concur_result.get("submission_id"),
+            "concur_batch_id": concur_result.get("batch_id"),
+            "concur_document_id": concur_result.get("document_id"),
+            "concur_submitted_at": concur_result.get("submitted_at"),
+            "concur_endpoint": concur_result.get("endpoint"),
+            "concur_processing_state": concur_result.get("processing_state"),
+            "concur_next_status": concur_result.get("next_status"),
             "message": concur_result.get("message", "Ticket processed successfully")
         }
 
@@ -250,11 +265,13 @@ def ticket_node(state: IDPState) -> IDPState:
             "status": "error",
             "data": data,
             "concur_status": "error",
+            "concur_mode": "mock",
             "message": str(e)
         }
         add_step_metric(state, "Create ticket output + send to Concur", started_at, before, str(e))
 
     return state
+    
 def other_node(state: IDPState) -> IDPState:
     started_at = time.time()
     before = get_current_metrics_snapshot()
