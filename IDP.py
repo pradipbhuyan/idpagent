@@ -636,6 +636,7 @@ QUESTION:
 
 def render_metrics_section():
     m = st.session_state.get("metrics", {})
+
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Total Cost", f"${m.get('cost', 0.0):.6f}")
     c2.metric("Total Tokens", m.get("tokens", 0))
@@ -648,6 +649,28 @@ def render_metrics_section():
             "Response Time": m["response_times"]
         })
         st.line_chart(df.set_index("Call"))
+
+    st.markdown("#### Cost per Document")
+
+    doc_costs = st.session_state.get("doc_costs", {})
+    doc_data = [
+        {
+            "SL No": i + 1,
+            "Document": k,
+            "Cost": round(v.get("cost", 0.0), 6),
+            "Tokens": v.get("tokens", 0),
+        }
+        for i, (k, v) in enumerate(doc_costs.items())
+    ]
+
+    if doc_data:
+        doc_df = pd.DataFrame(doc_data)
+        st.dataframe(doc_df, use_container_width=True, hide_index=True, height=220)
+
+        chart_df = doc_df[["Document", "Cost"]].copy()
+        st.bar_chart(chart_df.set_index("Document"))
+    else:
+        st.caption("No document-level cost recorded yet")
 
 def render_empty_state():
     st.markdown("### Ready to Process")
