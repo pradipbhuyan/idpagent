@@ -97,10 +97,18 @@ def resume_node(state: IDPState) -> IDPState:
     template_bytes = state.get("template")
 
     if not template_bytes:
-        template_path = Path("templates/resume_template.docx")
-        if template_path.exists():
-            with open(template_path, "rb") as f:
-                template_bytes = f.read()
+        possible_paths = [
+            Path("templates/resume_template.docx"),
+            Path("templates:resume_template.docx"),
+            Path(__file__).parent / "templates" / "resume_template.docx",
+            Path(__file__).parent / "templates:resume_template.docx",
+        ]
+
+        for template_path in possible_paths:
+            if template_path.exists():
+                with open(template_path, "rb") as f:
+                    template_bytes = f.read()
+                break
 
     if not template_bytes:
         state["error"] = "No resume template provided and default template not found"
