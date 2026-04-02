@@ -722,6 +722,10 @@ def render_invoice_result(result):
     c3.metric("Date", str(data.get("invoice_date") or "-"))
     c4.metric("Total", str(data.get("total") or "-"))
 
+    concur_status = result.get("concur_status", "-")
+    concur_mode = result.get("concur_mode", "-")
+    st.caption(f"Concur Status: {concur_status} | Mode: {concur_mode}")
+
     excel = result.get("excel")
     if excel:
         st.download_button(
@@ -735,9 +739,14 @@ def render_invoice_result(result):
     if table is not None:
         st.markdown("#### Extracted Fields")
         st.dataframe(table, use_container_width=True, height=220, hide_index=True)
+
+    if result.get("payload"):
+        with st.expander("Concur Payload", expanded=False):
+            st.json(result["payload"])
         
 def render_ticket_result(result):
     st.success(result.get("message", "Ticket processed successfully"))
+
     data = st.session_state.get("structured_data", {}) or {}
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Traveler", str(data.get("traveler_name") or "-"))
@@ -745,11 +754,15 @@ def render_ticket_result(result):
     c3.metric("Route", f"{data.get('from', '-')}" + " → " + f"{data.get('to', '-')}")
     c4.metric("Amount", str(data.get("amount") or "-"))
 
+    concur_status = result.get("concur_status", "-")
+    concur_mode = result.get("concur_mode", "-")
+    st.caption(f"Concur Status: {concur_status} | Mode: {concur_mode}")
+
     payload = result.get("payload")
     if payload:
-        with st.expander("Prepared Payload", expanded=True):
+        with st.expander("Concur Payload", expanded=True):
             st.json(payload)
-
+            
 def render_generic_result(result):
     st.success(result.get("message", "Processing completed"))
     text = st.session_state.get("full_text", "")
@@ -869,12 +882,23 @@ def render_details_section():
         else:
             st.caption("Structured JSON is available only for invoice and ticket")
 
+    with st.expander("Concur Delivery Status", expanded=False):
+        auto_result = st.session_state.get("auto_result", {})
+        result = auto_result.get("result", {}) if isinstance(auto_result, dict) else {}
+
+        if st.session_state.get("doc_type") in ["invoice", "ticket"]:
+            st.write(f"Status: {result.get('concur_status', 'not sent')}")
+            st.write(f"Mode: {result.get('concur_mode', '-')}")
+            if result.get("payload"):
+                st.json(result["payload"])
+        else:
+            st.caption("Concur delivery applies only to invoice and ticket")
+
     with st.expander("Document Chat", expanded=False):
         render_chat_section()
 
     with st.expander("Metrics", expanded=False):
         render_metrics_section()
-
 # ------------------------------
 # HEADER / CONTROLS
 # ------------------------------
