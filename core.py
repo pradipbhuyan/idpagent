@@ -4,6 +4,7 @@ from io import BytesIO
 from docx import Document as DocxDocument
 from langchain_openai import ChatOpenAI
 from streamlit import session_state as st_state
+import pandas as pd
 
 import tempfile
 from pathlib import Path
@@ -633,8 +634,9 @@ def replace_placeholders(doc, placeholders):
                 para.text = para.text.replace(key, str(value))
 
 
-
 def json_to_kv_dataframe(data):
+    import pandas as pd
+
     rows = []
 
     def flatten(prefix, obj):
@@ -645,11 +647,13 @@ def json_to_kv_dataframe(data):
             for i, item in enumerate(obj):
                 flatten(f"{prefix}[{i}]", item)
         else:
-            rows.append({"Field": prefix, "Value": json.dumps(obj) if isinstance(obj, (dict, list)) else str(obj)})
+            rows.append({
+                "Field": prefix,
+                "Value": json.dumps(obj) if isinstance(obj, (dict, list)) else str(obj)
+            })
 
-    flatten("", data)
+    flatten("", data if data is not None else {})
     return pd.DataFrame(rows)
-
 
 
 def generate_excel(df):
