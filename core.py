@@ -1,5 +1,6 @@
 import json
 import re
+import time
 from io import BytesIO
 from pathlib import Path
 import tempfile
@@ -10,6 +11,92 @@ from langchain_openai import ChatOpenAI
 from streamlit import session_state as st_state
 
 
+# ------------------------------
+# METRICS / LLM TRACKING
+# ------------------------------
+MODEL_PRICING = {
+    "gpt-4o-mini": {"input_per_1k": 0.00015, "output_per_1k": 0.0006},
+    "gpt-4o": {"input_per_1k": 0.005, "output_per_1k": 0.015},
+    "gpt-5": {"input_per_1k": 0.0, "output_per_1k": 0.0},  # set real values if you want exact cost
+}
+
+
+def ensure_metrics_state():
+    if "metrics" not in st_state:
+        st_state["metrics"] = {
+            "tokens": 0,
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "cost": 0.0,
+            "response_times": [],
+            "calls": 0
+        }
+
+    if "doc_costs" not in st_state:
+        st_state["doc_costs"] = {}
+
+
+def get_model_pricing(model_name: str):
+    return MODEL_PRICING.get(
+        model_name,
+        MODEL_PRICING.get("gpt-4o-mini")
+    )
+
+
+def invoke_llm_tracked(prompt: str):
+    if "api_key" not in st_state:
+        raise ValueError("Missing API key")
+
+    model_name = st_state.get("model_choice", "gpt-4o-mini")
+
+    llm = ChatOpenAI(
+        model=model_name,
+        temperature=0,
+        api_key=st_state["api_key"]
+    )
+
+    start = time.time()
+    response = llm.invoke(prompt)
+    duration = time.time() - start
+
+    usage = getattr(response, "response_metadata", {}).get("token_usage", {}) or {}
+    input_tokens = usage.get("prompt_tokens", 0)
+    output_tokens = usage.get("completion_tokens", 0)
+
+    if not input_tokens and not output_tokens:
+        input_tokens = len(str(prompt)) // 4
+        output_tokens = len(str(getattr(response, "content", ""))) // 4
+
+    total_tokens = input_tokens + output_tokens
+
+    pricing = get_model_pricing(model_name)
+    input_cost = input_tokens * pricing["input_per_1k"] / 1000
+    output_cost = output_tokens * pricing["output_per_1k"] / 1000
+    total_cost = input_cost + output_cost
+
+    ensure_metrics_state()
+
+    m = st_state["metrics"]
+    m["tokens"] += total_tokens
+    m["input_tokens"] += input_tokens
+    m["output_tokens"] += output_tokens
+    m["cost"] += total_cost
+    m["calls"] += 1
+    m["response_times"].append(duration)
+
+    doc = st_state.get("current_file") or "unknown"
+    if doc not in st_state["doc_costs"]:
+        st_state["doc_costs"][doc] = {"cost": 0.0, "tokens": 0}
+
+    st_state["doc_costs"][doc]["cost"] += total_cost
+    st_state["doc_costs"][doc]["tokens"] += total_tokens
+
+    return response
+
+
+# ------------------------------
+# JSON HELPERS
+# ------------------------------
 def safe_json_parse(text):
     if not text:
         return {}
@@ -38,18 +125,15 @@ def safe_json_parse(text):
     return {"raw_output": text}
 
 
+# ------------------------------
+# EXTRACTION
+# ------------------------------
 def extract_structured_json(text, doc_type):
     clean_text = re.sub(r"[^\x00-\x7F]+", " ", text or "")
     clean_text = clean_text.replace("{", "").replace("}", "").strip()
 
     if "api_key" not in st_state:
         return {"error": "Missing API key"}
-
-    llm = ChatOpenAI(
-        model=st_state.get("model_choice", "gpt-4o-mini"),
-        temperature=0,
-        api_key=st_state["api_key"]
-    )
 
     if doc_type == "resume":
         prompt = f"""
@@ -157,7 +241,7 @@ RULES:
 - Preserve values exactly where possible
 - Use arrays/objects where clearly present
 - Do not summarize
-- Do not invent fields not supported by the document
+- Do not invent unsupported fields
 
 DOCUMENT TEXT:
 {clean_text[:12000]}
@@ -196,7 +280,7 @@ DOCUMENT TEXT:
         return {}
 
     try:
-        response = llm.invoke(prompt).content.strip()
+        response = invoke_llm_tracked(prompt).content.strip()
         response = response.replace("```json", "").replace("```", "").strip()
 
         parsed = safe_json_parse(response)
@@ -221,14 +305,12 @@ No explanation.
 
 {clean_text[:3000]}
 """
-                    fallback_name = llm.invoke(name_prompt).content.strip()
+                    fallback_name = invoke_llm_tracked(name_prompt).content.strip()
                     parsed["name"] = fallback_name
                 except Exception:
                     parsed["name"] = "Candidate"
 
-            for field in [
-                "name", "email", "phone", "location", "linkedin", "summary"
-            ]:
+            for field in ["name", "email", "phone", "location", "linkedin", "summary"]:
                 if field not in parsed or parsed[field] is None:
                     parsed[field] = ""
 
@@ -300,15 +382,12 @@ No explanation.
         }
 
 
+# ------------------------------
+# RESUME SUMMARY
+# ------------------------------
 def generate_resume_summary(data):
     if "api_key" not in st_state:
         return "Summary not available"
-
-    llm = ChatOpenAI(
-        model=st_state.get("model_choice", "gpt-4o-mini"),
-        temperature=0,
-        api_key=st_state["api_key"]
-    )
 
     prompt = f"""
 Create a professional resume summary in plain text.
@@ -329,11 +408,14 @@ CANDIDATE DATA:
 """
 
     try:
-        return llm.invoke(prompt).content.strip()
+        return invoke_llm_tracked(prompt).content.strip()
     except Exception:
         return "Summary not available"
 
 
+# ------------------------------
+# RESUME BUILDER
+# ------------------------------
 def build_resume(data, template_file):
     def safe_str(value):
         return "" if value is None else str(value)
@@ -582,6 +664,9 @@ def build_resume(data, template_file):
     return buffer.getvalue()
 
 
+# ------------------------------
+# FILE HELPERS
+# ------------------------------
 def save_temp_file(uploaded_file):
     suffix = Path(uploaded_file.name).suffix
     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
@@ -589,15 +674,12 @@ def save_temp_file(uploaded_file):
         return tmp.name
 
 
+# ------------------------------
+# DOC TYPE DETECTION
+# ------------------------------
 def detect_document_type(text):
     if "api_key" not in st_state:
         return "other"
-
-    llm = ChatOpenAI(
-        model=st_state.get("model_choice", "gpt-4o-mini"),
-        temperature=0,
-        api_key=st_state["api_key"]
-    )
 
     prompt = f"""
 Classify document into ONE label:
@@ -618,7 +700,7 @@ STRICT RULES:
 """
 
     try:
-        raw = llm.invoke(prompt).content.lower().strip()
+        raw = invoke_llm_tracked(prompt).content.lower().strip()
     except Exception:
         return "other"
 
@@ -635,6 +717,9 @@ STRICT RULES:
     return "other"
 
 
+# ------------------------------
+# DATA EXPORT HELPERS
+# ------------------------------
 def json_to_kv_dataframe(data):
     rows = []
 
