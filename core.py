@@ -533,23 +533,31 @@ def build_resume(data, template_file):
     # generate summary
     summary = generate_resume_summary(data)
 
-    # load template
-    if template_file:
-        try:
-            if isinstance(template_file, bytes):
-                doc = DocxDocument(BytesIO(template_file))
-            elif hasattr(template_file, "read"):
-                content = template_file.read()
+    # load template safely
+    if not template_file:
+        raise ValueError("No template file provided")
+    
+    try:
+        if isinstance(template_file, bytes):
+            doc = DocxDocument(BytesIO(template_file))
+    
+        elif hasattr(template_file, "read"):
+            content = template_file.read()
+            if not content:
+                raise ValueError("Template file is empty")
+            if hasattr(template_file, "seek"):
                 template_file.seek(0)
-                doc = DocxDocument(BytesIO(content))
-            else:
-                doc = DocxDocument()
-        except Exception as e:
-            print("Template load error:", e)
-            doc = DocxDocument()
-    else:
-        doc = DocxDocument()
-
+            doc = DocxDocument(BytesIO(content))
+    
+        elif isinstance(template_file, str):
+            doc = DocxDocument(template_file)
+    
+        else:
+            raise TypeError(f"Unsupported template_file type: {type(template_file)}")
+    
+    except Exception as e:
+        raise RuntimeError(f"Template load failed: {e}")
+    
     # prepare structured placeholders with preserved dates
     placeholders = {
         "{{name}}": safe_str(data.get("name", "")),
