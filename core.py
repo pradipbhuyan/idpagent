@@ -684,3 +684,38 @@ def generate_excel(df):
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
         df.to_excel(writer, index=False, sheet_name="data")
     return output.getvalue()
+
+def send_to_concur(doc_type, data, mode="mock"):
+    """
+    Sends invoice or ticket payload to Concur.
+    mode:
+      - mock: simulated success
+      - real: placeholder for real API integration
+    """
+
+    payload = {
+        "type": doc_type,
+        "data": data,
+    }
+
+    if doc_type == "invoice":
+        try:
+            payload["line_items"] = json_to_kv_dataframe(data).to_dict(orient="records")
+        except Exception:
+            payload["line_items"] = []
+
+    if mode == "mock":
+        return {
+            "status": "sent",
+            "mode": "mock",
+            "message": f"{doc_type.title()} sent to Concur (mock)",
+            "payload": payload
+        }
+
+    # Replace this block with real Concur API call later
+    return {
+        "status": "sent",
+        "mode": "real",
+        "message": f"{doc_type.title()} sent to Concur",
+        "payload": payload
+    }
