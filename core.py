@@ -685,12 +685,13 @@ def generate_excel(df):
         df.to_excel(writer, index=False, sheet_name="data")
     return output.getvalue()
 
+from datetime import datetime
+import uuid
+
 def send_to_concur(doc_type, data, mode="mock"):
     """
-    Sends invoice or ticket payload to Concur.
-    mode:
-      - mock: simulated success
-      - real: placeholder for real API integration
+    Mock Concur sender that looks like a real API integration response.
+    Replace the `mode != "mock"` block later with actual Concur API calls.
     """
 
     payload = {
@@ -704,18 +705,37 @@ def send_to_concur(doc_type, data, mode="mock"):
         except Exception:
             payload["line_items"] = []
 
+    now_utc = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+    short_id = uuid.uuid4().hex[:8].upper()
+    batch_id = f"CCB-{datetime.utcnow().strftime('%Y%m%d')}-{uuid.uuid4().hex[:6].upper()}"
+    endpoint = "Expense Entry Import API" if doc_type == "invoice" else "Travel Request / Expense Entry API"
+
     if mode == "mock":
         return {
-            "status": "sent",
+            "status": "submitted",
             "mode": "mock",
-            "message": f"{doc_type.title()} sent to Concur (mock)",
+            "message": f"{doc_type.title()} submitted to Concur mock gateway",
+            "submission_id": f"SUB-{short_id}",
+            "batch_id": batch_id,
+            "document_id": f"{doc_type[:3].upper()}-{uuid.uuid4().hex[:10].upper()}",
+            "submitted_at": now_utc,
+            "endpoint": endpoint,
+            "processing_state": "Queued for downstream validation",
+            "next_status": "Expected to transition to Accepted or Rejected after validation",
             "payload": payload
         }
 
-    # Replace this block with real Concur API call later
+    # Replace this later with real Concur API request/response handling
     return {
-        "status": "sent",
+        "status": "submitted",
         "mode": "real",
-        "message": f"{doc_type.title()} sent to Concur",
+        "message": f"{doc_type.title()} submitted to Concur",
+        "submission_id": f"SUB-{short_id}",
+        "batch_id": batch_id,
+        "document_id": f"{doc_type[:3].upper()}-{uuid.uuid4().hex[:10].upper()}",
+        "submitted_at": now_utc,
+        "endpoint": endpoint,
+        "processing_state": "Accepted by Concur endpoint",
+        "next_status": "Awaiting downstream processing",
         "payload": payload
     }
