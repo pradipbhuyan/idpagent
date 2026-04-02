@@ -1,5 +1,6 @@
 from typing import TypedDict, Any, Optional
 from pathlib import Path
+import time
 
 from langgraph.graph import StateGraph, END
 
@@ -9,11 +10,10 @@ from core import (
     build_resume,
     json_to_kv_dataframe,
     generate_excel,
+    get_current_metrics_snapshot,
+    diff_metrics_snapshot,
 )
 
-# ------------------------------
-# STATE
-# ------------------------------
 class IDPState(TypedDict, total=False):
     text: str
     template: Optional[bytes]
@@ -24,16 +24,24 @@ class IDPState(TypedDict, total=False):
     data: dict
     result: dict
     error: str
+    step_metrics: list
 
-
-# ------------------------------
-# HELPERS
-# ------------------------------
 def safe_progress(state, percent, message):
     progress = state.get("progress")
     if progress:
         progress(percent, message)
 
+def add_step_metric(state, step, started_at, before_metrics, message=""):
+    after_metrics = get_current_metrics_snapshot()
+    delta = diff_metrics_snapshot(before_metrics, after_metrics)
+    if "step_metrics" not in state or state["step_metrics"] is None:
+        state["step_metrics"] = []
+    state["step_metrics"].append({
+        "step": step,
+        "message": message,
+        "duration": time.time() - started_at,
+        "metrics": delta
+    })
 
 def get_resume_filename_from_data(data: dict) -> str:
     if not isinstance(data, dict):
@@ -56,42 +64,47 @@ def get_resume_filename_from_data(data: dict) -> str:
     safe_name = safe_name if safe_name else "candidate"
     return f"{safe_name}.docx"
 
-
-# ------------------------------
-# NODES
-# ------------------------------
 def detect_node(state: IDPState) -> IDPState:
-    safe_progress(state, 10, "🔍 Detecting document type...")
+    started_at = time.time()
+    before = get_current_metrics_snapshot()
+    safe_progress(state, 10, "Detecting document type")
 
     text = (state.get("text") or "").strip()
     if not text:
         state["error"] = "No extracted text available for processing"
         state["doc_type"] = "other"
+        add_step_metric(state, "Detect document type", started_at, before, "No text found")
         return state
 
     try:
         state["doc_type"] = detect_document_type(text)
+        add_step_metric(state, "Detect document type", started_at, before, f"Detected {state['doc_type']}")
     except Exception as e:
         state["error"] = f"Document type detection failed: {str(e)}"
         state["doc_type"] = "other"
+        add_step_metric(state, "Detect document type", started_at, before, str(e))
 
     return state
 
-
 def resume_extract_node(state: IDPState) -> IDPState:
-    safe_progress(state, 35, "🧠 Extracting resume details...")
+    started_at = time.time()
+    before = get_current_metrics_snapshot()
+    safe_progress(state, 35, "Extracting resume details")
 
     try:
         state["data"] = extract_structured_json(state["text"], "resume")
+        add_step_metric(state, "Extract resume data", started_at, before, "Resume fields extracted")
     except Exception as e:
         state["error"] = f"Resume extraction failed: {str(e)}"
         state["data"] = {}
+        add_step_metric(state, "Extract resume data", started_at, before, str(e))
 
     return state
 
-
 def resume_node(state: IDPState) -> IDPState:
-    safe_progress(state, 65, "📄 Building resume...")
+    started_at = time.time()
+    before = get_current_metrics_snapshot()
+    safe_progress(state, 65, "Building resume")
 
     data = state.get("data") or {}
     template_bytes = state.get("template")
@@ -103,7 +116,6 @@ def resume_node(state: IDPState) -> IDPState:
             Path(__file__).parent / "templates" / "resume_template.docx",
             Path(__file__).parent / "templates:resume_template.docx",
         ]
-
         for template_path in possible_paths:
             if template_path.exists():
                 with open(template_path, "rb") as f:
@@ -119,14 +131,14 @@ def resume_node(state: IDPState) -> IDPState:
             "file_name": "candidate.docx",
             "message": "Resume template missing"
         }
+        add_step_metric(state, "Build resume", started_at, before, "Template missing")
         return state
 
     try:
         file_bytes = build_resume(data, template_bytes)
         file_name = get_resume_filename_from_data(data)
 
-        safe_progress(state, 95, "✅ Resume ready")
-
+        safe_progress(state, 95, "Resume ready")
         state["result"] = {
             "type": "resume",
             "file": file_bytes,
@@ -134,6 +146,7 @@ def resume_node(state: IDPState) -> IDPState:
             "file_name": file_name,
             "message": "Resume generated successfully"
         }
+        add_step_metric(state, "Build resume", started_at, before, "Resume file created")
     except Exception as e:
         state["error"] = f"Resume generation failed: {str(e)}"
         state["result"] = {
@@ -143,35 +156,37 @@ def resume_node(state: IDPState) -> IDPState:
             "file_name": "candidate.docx",
             "message": str(e)
         }
+        add_step_metric(state, "Build resume", started_at, before, str(e))
 
     return state
 
-
 def extract_json_node(state: IDPState) -> IDPState:
-    safe_progress(state, 35, "🧠 Extracting structured JSON...")
+    started_at = time.time()
+    before = get_current_metrics_snapshot()
+    safe_progress(state, 35, "Extracting structured JSON")
 
     doc_type = state.get("doc_type", "other")
-
     try:
         state["data"] = extract_structured_json(state["text"], doc_type)
+        add_step_metric(state, f"Extract {doc_type} JSON", started_at, before, "Structured fields extracted")
     except Exception as e:
         state["error"] = f"Structured extraction failed: {str(e)}"
         state["data"] = {}
+        add_step_metric(state, f"Extract {doc_type} JSON", started_at, before, str(e))
 
     return state
 
-
 def invoice_node(state: IDPState) -> IDPState:
-    safe_progress(state, 70, "📊 Creating Excel...")
+    started_at = time.time()
+    before = get_current_metrics_snapshot()
+    safe_progress(state, 70, "Creating Excel")
 
     data = state.get("data") or {}
-
     try:
         df = json_to_kv_dataframe(data)
         excel = generate_excel(df)
 
-        safe_progress(state, 95, "✅ Excel ready")
-
+        safe_progress(state, 95, "Excel ready")
         state["result"] = {
             "type": "invoice",
             "table": df,
@@ -179,6 +194,7 @@ def invoice_node(state: IDPState) -> IDPState:
             "data": data,
             "message": "Invoice processed successfully"
         }
+        add_step_metric(state, "Create invoice output", started_at, before, "Excel created")
     except Exception as e:
         state["error"] = f"Invoice output generation failed: {str(e)}"
         state["result"] = {
@@ -188,28 +204,26 @@ def invoice_node(state: IDPState) -> IDPState:
             "data": data,
             "message": str(e)
         }
+        add_step_metric(state, "Create invoice output", started_at, before, str(e))
 
     return state
 
-
 def ticket_node(state: IDPState) -> IDPState:
-    safe_progress(state, 70, "📤 Preparing ticket payload...")
+    started_at = time.time()
+    before = get_current_metrics_snapshot()
+    safe_progress(state, 70, "Preparing ticket payload")
 
     data = state.get("data") or {}
-
     try:
-        safe_progress(state, 95, "✅ Ticket ready")
-
+        safe_progress(state, 95, "Ticket ready")
         state["result"] = {
             "type": "ticket",
             "status": "ready",
             "data": data,
-            "payload": {
-                "type": "ticket",
-                "data": data
-            },
+            "payload": {"type": "ticket", "data": data},
             "message": "Ticket processed successfully"
         }
+        add_step_metric(state, "Create ticket output", started_at, before, "Payload prepared")
     except Exception as e:
         state["error"] = f"Ticket processing failed: {str(e)}"
         state["result"] = {
@@ -218,27 +232,25 @@ def ticket_node(state: IDPState) -> IDPState:
             "data": data,
             "message": str(e)
         }
+        add_step_metric(state, "Create ticket output", started_at, before, str(e))
 
     return state
 
-
 def other_node(state: IDPState) -> IDPState:
-    safe_progress(state, 80, "ℹ️ No structured extraction required")
+    started_at = time.time()
+    before = get_current_metrics_snapshot()
+    safe_progress(state, 80, "No structured extraction required")
 
     state["data"] = {}
     state["result"] = {
         "type": state.get("doc_type", "other"),
         "message": f"No structured output configured for document type: {state.get('doc_type', 'other')}"
     }
+    add_step_metric(state, "Finalize generic output", started_at, before, "No structured processing needed")
     return state
 
-
-# ------------------------------
-# ROUTING
-# ------------------------------
 def route_after_detect(state: IDPState) -> str:
     dt = state.get("doc_type", "other")
-
     if dt == "resume":
         return "resume_extract"
     elif dt in ["invoice", "ticket"]:
@@ -246,10 +258,8 @@ def route_after_detect(state: IDPState) -> str:
     else:
         return "other"
 
-
 def route_after_extract_json(state: IDPState) -> str:
     dt = state.get("doc_type", "other")
-
     if dt == "invoice":
         return "invoice"
     elif dt == "ticket":
@@ -257,22 +267,15 @@ def route_after_extract_json(state: IDPState) -> str:
     else:
         return "other"
 
-
-# ------------------------------
-# GRAPH
-# ------------------------------
 def build_graph():
     builder = StateGraph(IDPState)
 
     builder.add_node("detect", detect_node)
-
     builder.add_node("resume_extract", resume_extract_node)
     builder.add_node("resume", resume_node)
-
     builder.add_node("extract_json", extract_json_node)
     builder.add_node("invoice", invoice_node)
     builder.add_node("ticket", ticket_node)
-
     builder.add_node("other", other_node)
 
     builder.set_entry_point("detect")
