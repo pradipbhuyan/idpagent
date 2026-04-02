@@ -10,6 +10,7 @@ from core import (
     build_resume,
     json_to_kv_dataframe,
     generate_excel,
+    send_to_concur,
     get_current_metrics_snapshot,
     diff_metrics_snapshot,
 )
@@ -179,63 +180,81 @@ def extract_json_node(state: IDPState) -> IDPState:
 def invoice_node(state: IDPState) -> IDPState:
     started_at = time.time()
     before = get_current_metrics_snapshot()
-    safe_progress(state, 70, "Creating Excel")
+    safe_progress(state, 70, "Creating invoice output")
 
     data = state.get("data") or {}
+
     try:
         df = json_to_kv_dataframe(data)
         excel = generate_excel(df)
 
-        safe_progress(state, 95, "Excel ready")
+        safe_progress(state, 85, "Sending invoice to Concur")
+        concur_result = send_to_concur("invoice", data, mode="mock")
+
+        safe_progress(state, 95, "Invoice sent to Concur")
+
         state["result"] = {
             "type": "invoice",
             "table": df,
             "excel": excel,
             "data": data,
-            "message": "Invoice processed successfully"
+            "payload": concur_result.get("payload"),
+            "concur_status": concur_result.get("status"),
+            "concur_mode": concur_result.get("mode"),
+            "message": concur_result.get("message", "Invoice processed successfully")
         }
-        add_step_metric(state, "Create invoice output", started_at, before, "Excel created")
+
+        add_step_metric(state, "Create invoice output + send to Concur", started_at, before, "Invoice sent")
     except Exception as e:
-        state["error"] = f"Invoice output generation failed: {str(e)}"
+        state["error"] = f"Invoice processing failed: {str(e)}"
         state["result"] = {
             "type": "invoice",
             "table": None,
             "excel": None,
             "data": data,
+            "concur_status": "error",
             "message": str(e)
         }
-        add_step_metric(state, "Create invoice output", started_at, before, str(e))
+        add_step_metric(state, "Create invoice output + send to Concur", started_at, before, str(e))
 
     return state
-
+    
 def ticket_node(state: IDPState) -> IDPState:
     started_at = time.time()
     before = get_current_metrics_snapshot()
     safe_progress(state, 70, "Preparing ticket payload")
 
     data = state.get("data") or {}
+
     try:
-        safe_progress(state, 95, "Ticket ready")
+        safe_progress(state, 85, "Sending ticket to Concur")
+        concur_result = send_to_concur("ticket", data, mode="mock")
+
+        safe_progress(state, 95, "Ticket sent to Concur")
+
         state["result"] = {
             "type": "ticket",
-            "status": "ready",
+            "status": "sent",
             "data": data,
-            "payload": {"type": "ticket", "data": data},
-            "message": "Ticket processed successfully"
+            "payload": concur_result.get("payload"),
+            "concur_status": concur_result.get("status"),
+            "concur_mode": concur_result.get("mode"),
+            "message": concur_result.get("message", "Ticket processed successfully")
         }
-        add_step_metric(state, "Create ticket output", started_at, before, "Payload prepared")
+
+        add_step_metric(state, "Create ticket output + send to Concur", started_at, before, "Ticket sent")
     except Exception as e:
         state["error"] = f"Ticket processing failed: {str(e)}"
         state["result"] = {
             "type": "ticket",
             "status": "error",
             "data": data,
+            "concur_status": "error",
             "message": str(e)
         }
-        add_step_metric(state, "Create ticket output", started_at, before, str(e))
+        add_step_metric(state, "Create ticket output + send to Concur", started_at, before, str(e))
 
     return state
-
 def other_node(state: IDPState) -> IDPState:
     started_at = time.time()
     before = get_current_metrics_snapshot()
