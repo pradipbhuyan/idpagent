@@ -942,22 +942,16 @@ def render_details_section():
 # ------------------------------
 def render_header():
     logo_path = Path(__file__).parent / "IDP-Logo1.png"
-    c0, c1, c2, c3 = st.columns([1.2, 4, 1.2, 1.2])
+    col_logo, col_title = st.columns([1, 6], gap="small")
 
-    with c0:
+    with col_logo:
         if logo_path.exists():
-            st.image(logo_path, width=140)
+            st.image(logo_path, width=130)
 
-    with c1:
+    with col_title:
         st.markdown("## Intelligent Document Processor")
         st.caption("AI-powered document understanding & automation")
-        st.write(f"File: {st.session_state.get('current_file') or 'No file uploaded'}")
 
-    with c2:
-        st.metric("Status", st.session_state.get("agent_status", "Idle"))
-
-    with c3:
-        st.metric("Elapsed", f"{st.session_state.get('elapsed_time', 0.0):.1f}s")
 
 def render_upload_controls():
     with st.sidebar:
@@ -986,34 +980,32 @@ def render_upload_controls():
         st.markdown("### ⚙️ Processing Mode")
         st.success("Auto (LangGraph)")
 
-        #template_file = st.file_uploader(
-        #    "Resume Template (optional)",
-        #    type=["docx"],
-        #    key="sidebar_resume_template"
-        #)
-        #if template_file:
-        #    st.session_state["resume_template"] = template_file.getvalue()
+        template_file = st.file_uploader(
+            "Resume Template (optional)",
+            type=["docx"],
+            key="sidebar_resume_template"
+        )
+        if template_file:
+            st.session_state["resume_template"] = template_file.getvalue()
 
-        st.markdown("---")
-        cost = st.session_state.get("metrics", {}).get("cost", 0)
-        st.write(f"Session Cost 💰 ${round(cost, 6)}")
+    col_upload, col_reset = st.columns([6, 1], gap="small")
 
-    c1, c2 = st.columns([5, 1])
-
-    with c1:
+    with col_upload:
         uploaded_file = st.file_uploader(
             "Upload document",
             type=["txt", "pdf", "docx", "pptx", "xlsx", "png", "jpg", "jpeg"],
-            key="main_file_uploader"
+            key="main_file_uploader",
+            label_visibility="visible"
         )
 
-    with c2:
+    with col_reset:
         st.write("")
         st.write("")
         if st.button("Reset", use_container_width=True):
             reset_document_state()
             st.rerun()
 
+    st.markdown("---")
     return uploaded_file
     
 # ------------------------------
