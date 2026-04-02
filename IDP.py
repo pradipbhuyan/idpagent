@@ -1,53 +1,54 @@
-
 # ==============================
-# INTELLIGENT DOCUMENT PROCESSOR - with Agentic Mode
+# INTELLIGENT DOCUMENT PROCESSOR - AUTO MODE ONLY (LangGraph)
+# IDP.py
 # ==============================
 
-import os
+import re
+import json
+import time
 import base64
 import tempfile
-import json
-import re
+import hashlib
+import traceback
 from pathlib import Path
-from io import BytesIO
 
-import streamlit as st
 import pandas as pd
-
-import os
 import streamlit as st
 
-#os.environ["OPENAI_API_KEY"] = st.secrets["OPENAI_API_KEY"]
-
-from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_community.vectorstores import Chroma
-from langchain_openai import OpenAIEmbeddings, ChatOpenAI
-
-from langchain_community.document_loaders import (
-    TextLoader,
-    PyPDFLoader,
-    UnstructuredPowerPointLoader,
-    UnstructuredExcelLoader,
-)
+from openai import OpenAI
+from docx import Document as DocxDocument
+from pptx import Presentation
+from streamlit_pdf_viewer import pdf_viewer
 
 from langchain_core.documents import Document
 from langchain_core.messages import HumanMessage
-from docx import Document as DocxDocument
-from streamlit_pdf_viewer import pdf_viewer
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain_community.vectorstores import Chroma
+from langchain_openai import OpenAIEmbeddings, ChatOpenAI
+from langchain_community.document_loaders import (
+    TextLoader,
+    PyPDFLoader,
+)
 
 from workflow import build_graph
-
 from core import (
-    detect_document_type,
-    extract_structured_json,
-    build_resume,
     json_to_kv_dataframe,
-    generate_excel
+    generate_excel,
 )
-# ------------------------------
-# LLM & EMBEDDINGS
-# ------------------------------
 
+# ------------------------------
+# PAGE CONFIG
+# ------------------------------
+st.set_page_config("IDP - Professional", layout="wide")
+
+# ------------------------------
+# USERS
+# ------------------------------
+USERS = st.secrets.get("users", {})
+
+# ------------------------------
+# CACHED MODELS
+# ------------------------------
 @st.cache_resource
 def get_llm(api_key, model):
     return ChatOpenAI(
@@ -61,39 +62,17 @@ def get_embeddings(api_key):
     return OpenAIEmbeddings(api_key=api_key)
 
 # ------------------------------
-# INIT
-# ------------------------------
-
-st.set_page_config("IDP - Professional", layout="wide")
-
-# ------------------------------
-# LOGIN + API KEY VALIDATION
-# ------------------------------
-
-import streamlit as st
-from pathlib import Path
-from openai import OpenAI
-
-USERS = st.secrets.get("users", {})
-
-# ------------------------------
-# VALIDATE API KEY
+# AUTH
 # ------------------------------
 def validate_api_key(api_key):
     try:
         client = OpenAI(api_key=api_key)
-
-        # Lightweight test call
         client.models.list()
-
         return True
     except Exception:
         return False
 
 
-# ------------------------------
-# LOGIN FUNCTION
-# ------------------------------
 def login():
     logo_path = Path(__file__).parent / "IDP-Logo1.png"
 
@@ -110,8 +89,6 @@ def login():
         api_key = st.text_input("OpenAI API Key", type="password")
 
         if st.button("Login", use_container_width=True):
-
-            # Validate user
             if username not in USERS or USERS[username]["password"] != password:
                 st.error("Invalid username or password")
                 return
@@ -120,37 +97,58 @@ def login():
                 st.error("Please enter your OpenAI API key")
                 return
 
-            # 🔑 Validate API key
             with st.spinner("Validating API key..."):
                 if not validate_api_key(api_key):
                     st.error("Invalid OpenAI API key")
                     return
 
-            # Save session
             st.session_state["logged_in"] = True
             st.session_state["user"] = username
             st.session_state["role"] = USERS[username].get("role", "user")
             st.session_state["api_key"] = api_key
 
             st.success(f"Welcome {username}")
-
             st.rerun()
 
 # ------------------------------
 # SESSION INIT
 # ------------------------------
-if "logged_in" not in st.session_state:
-    st.session_state["logged_in"] = False
+DEFAULT_METRICS = {
+    "tokens": 0,
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "cost": 0.0,
+    "response_times": [],
+    "calls": 0
+}
 
-if "user" not in st.session_state:
-    st.session_state["user"] = None
+DEFAULT_KEYS = {
+    "logged_in": False,
+    "user": None,
+    "role": None,
+    "api_key": None,
+    "model_choice": "gpt-4o-mini",
+    "resume_template": None,
+    "structured_data": None,
+    "doc_type": None,
+    "vectorstore": None,
+    "full_text": None,
+    "generated_resume": None,
+    "chat_history": [],
+    "active_tab": "Preview",
+    "suggested_questions": [],
+    "metrics": DEFAULT_METRICS.copy(),
+    "doc_costs": {},
+    "doc_metrics": {},
+    "auto_result": None,
+    "file_hash": None,
+    "current_file": None,
+    "processing_error": None,
+}
 
-if "role" not in st.session_state:
-    st.session_state["role"] = None
-
-if "api_key" not in st.session_state:
-    st.session_state["api_key"] = None
-
+for k, v in DEFAULT_KEYS.items():
+    if k not in st.session_state:
+        st.session_state[k] = v
 
 # ------------------------------
 # LOGIN GATE
@@ -158,130 +156,74 @@ if "api_key" not in st.session_state:
 if not st.session_state["logged_in"]:
     login()
     st.stop()
-    
-# ------------------------------
-# API KEY SAFETY 
-# ------------------------------
+
 if not st.session_state.get("api_key"):
     st.error("API key missing. Please login again.")
     st.stop()
 
 # ------------------------------
-# SIDEBAR (USER INFO + LOGOUT)
+# UTILS
 # ------------------------------
-with st.sidebar:
-    st.markdown("### 👤 User Info")
-    st.write(f"**User:** {st.session_state['user']}")
-    st.write(f"**Role:** {st.session_state['role']}")
+def reset_document_state():
+    st.session_state["structured_data"] = None
+    st.session_state["doc_type"] = None
+    st.session_state["vectorstore"] = None
+    st.session_state["full_text"] = None
+    st.session_state["generated_resume"] = None
+    st.session_state["chat_history"] = []
+    st.session_state["suggested_questions"] = []
+    st.session_state["auto_result"] = None
+    st.session_state["processing_error"] = None
 
-    st.success("🔑 API key loaded securely")
 
-    # 🤖 Model Selection
-    st.markdown("### 🤖 Model")
-    
-    model_choice = st.selectbox(
-        "Choose Model",
-        ["gpt-4o-mini", "gpt-4o", "gpt-5"],
-        index=0
-    )
-    
-    # Store in session
-    st.session_state["model_choice"] = model_choice
-
-    st.caption(f"Using: {st.session_state['model_choice']}")
-    
-    if st.button("🚪 Logout"):
-        for key in ["logged_in", "user", "role", "api_key"]:
-            if key in st.session_state:
-                del st.session_state[key]
-
-        st.success("Logged out")
-        st.rerun()
-
-    st.markdown("### ⚙️ Mode")
-
-    mode = st.radio(
-        "Processing Mode",
-        ["Manual", "Auto (LangGraph)"],
-        horizontal=True
+def tracked_llm_call(prompt):
+    llm = get_llm(
+        st.session_state["api_key"],
+        st.session_state.get("model_choice", "gpt-4o-mini")
     )
 
-    st.session_state["mode"] = mode
+    start = time.time()
+    response = llm.invoke(prompt)
+    duration = time.time() - start
 
-    template_file = st.file_uploader(
-        "Upload Resume Template (Optional)",
-        type=["docx"]
-    )
-    
-    if template_file:
-        st.session_state["resume_template"] = template_file.getvalue()
-    
-    st.markdown("---")
+    try:
+        usage = getattr(response, "response_metadata", {}).get("token_usage", {})
+        input_tokens = usage.get("prompt_tokens", 0)
+        output_tokens = usage.get("completion_tokens", 0)
+    except Exception:
+        input_tokens = len(str(prompt)) // 4
+        output_tokens = len(str(getattr(response, "content", ""))) // 4
 
-    # 💰 Cost
-    cost = st.session_state.get("metrics", {}).get("cost", 0)
-    st.write(f"Session Cost 💰 ${round(cost, 6)}")
-    
+    total_tokens = input_tokens + output_tokens
 
-logo_path = Path(__file__).parent / "IDP-Logo1.png"
+    input_cost = input_tokens * 0.00015 / 1000
+    output_cost = output_tokens * 0.0006 / 1000
+    total_cost = input_cost + output_cost
 
-col1, col2 = st.columns([1, 7], gap="small")
+    m = st.session_state.metrics
+    m["tokens"] += total_tokens
+    m["input_tokens"] += input_tokens
+    m["output_tokens"] += output_tokens
+    m["cost"] += total_cost
+    m["calls"] += 1
+    m["response_times"].append(duration)
 
-with col1:
-    st.image(logo_path, width=280)
+    doc = st.session_state.get("current_file") or "unknown"
+    if doc not in st.session_state.doc_costs:
+        st.session_state.doc_costs[doc] = {"cost": 0, "tokens": 0}
 
-with col2:
-    st.markdown("## Intelligent Document Processor")
-    st.caption("AI-powered document understanding & automation")
+    st.session_state.doc_costs[doc]["cost"] += total_cost
+    st.session_state.doc_costs[doc]["tokens"] += total_tokens
 
-# Session state
-for key in ["structured_data", "doc_type", "vectorstore", "full_text"]:
-    if key not in st.session_state:
-        st.session_state[key] = None
+    return response
 
-if "generated_resume" not in st.session_state:
-    st.session_state.generated_resume = None
 
-if "chat_history" not in st.session_state:
-    st.session_state.chat_history = []
+def update_progress(percent, message):
+    if "progress_bar" not in st.session_state:
+        st.session_state.progress_bar = st.progress(0)
 
-if "processed_file" not in st.session_state:
-    st.session_state.processed_file = None
+    st.session_state.progress_bar.progress(percent, text=message)
 
-if "active_tab" not in st.session_state:
-    st.session_state.active_tab = 0
-
-if "suggested_questions" not in st.session_state:
-    st.session_state.suggested_questions = []
-
-if "metrics" not in st.session_state:
-    st.session_state.metrics = {
-        "tokens": 0,
-        "input_tokens": 0,
-        "output_tokens": 0,
-        "cost": 0.0,
-        "response_times": [],
-        "calls": 0
-    }
-
-if "doc_costs" not in st.session_state:
-    st.session_state.doc_costs = {}
-
-if "doc_metrics" not in st.session_state:
-    st.session_state.doc_metrics = {}
-
-# ------------------------------
-# FILE UPLOAD
-# ------------------------------
-
-uploaded_file = st.file_uploader(
-    "Drag and drop file here",
-    type=["txt", "pdf", "docx", "pptx", "xlsx", "png", "jpg", "jpeg"]
-)
-
-# ------------------------------
-# HELPERS
-# ------------------------------
 
 def save_temp_file(uploaded_file):
     suffix = Path(uploaded_file.name).suffix
@@ -290,10 +232,29 @@ def save_temp_file(uploaded_file):
         return tmp.name
 
 
-def load_docx_safe(file_path):
+def extract_docx_text(file_path):
     doc = DocxDocument(file_path)
-    text = "\n".join([p.text for p in doc.paragraphs if p.text.strip()])
-    return [Document(page_content=text)]
+    parts = []
+
+    for p in doc.paragraphs:
+        if p.text and p.text.strip():
+            parts.append(p.text.strip())
+
+    for table in doc.tables:
+        for row in table.rows:
+            cells = [cell.text.strip() for cell in row.cells if cell.text and cell.text.strip()]
+            if cells:
+                parts.append(" | ".join(cells))
+
+    for section in doc.sections:
+        for p in section.header.paragraphs:
+            if p.text and p.text.strip():
+                parts.append(p.text.strip())
+        for p in section.footer.paragraphs:
+            if p.text and p.text.strip():
+                parts.append(p.text.strip())
+
+    return "\n".join(parts).strip()
 
 
 def process_file(uploaded_file):
@@ -302,16 +263,10 @@ def process_file(uploaded_file):
     if not uploaded_file:
         return documents
 
-    # ✅ Reset pointer (important)
     uploaded_file.seek(0)
-
     suffix = Path(uploaded_file.name).suffix.lower()
 
-    # ------------------------------
-    # 🖼️ IMAGE OCR
-    # ------------------------------
     if suffix in [".png", ".jpg", ".jpeg"]:
-
         encoded = base64.b64encode(uploaded_file.getvalue()).decode()
 
         message = HumanMessage(
@@ -348,96 +303,86 @@ Rules:
                 st.session_state["api_key"],
                 st.session_state.get("model_choice", "gpt-4o-mini")
             )
-
             response = llm.invoke([message])
             content = getattr(response, "content", "") or ""
 
-            if not content.strip():
+            if not str(content).strip():
                 content = "No readable text found in image"
+
+            documents.append(Document(page_content=str(content)))
 
         except Exception as e:
             st.error(f"OCR failed: {str(e)}")
-            content = "OCR failed"
+            return []
 
-        documents.append(Document(page_content=str(content)))
+        return documents
 
-    # ------------------------------
-    # 📄 OTHER FILE TYPES
-    # ------------------------------
-    else:
-        file_path = save_temp_file(uploaded_file)
+    file_path = save_temp_file(uploaded_file)
 
-        try:
-            if suffix == ".txt":
-                try:
-                    documents.extend(TextLoader(file_path, encoding="utf-8").load())
-                except Exception:
-                    documents.extend(TextLoader(file_path, encoding="cp1252").load())
+    try:
+        if suffix == ".txt":
+            try:
+                documents.extend(TextLoader(file_path, encoding="utf-8").load())
+            except Exception:
+                documents.extend(TextLoader(file_path, encoding="cp1252").load())
 
-            elif suffix == ".pdf":
-                docs = PyPDFLoader(file_path).load()
-                if docs:
-                    documents.extend(docs)
-                else:
-                    st.warning("PDF contains no extractable text")
+        elif suffix == ".pdf":
+            docs = PyPDFLoader(file_path).load()
+            if docs:
+                documents.extend(docs)
+            else:
+                st.warning("PDF contains no extractable text")
 
-            elif suffix == ".docx":
-                documents.extend(load_docx_safe(file_path))
-
-            elif suffix == ".pptx":
-                from pptx import Presentation
-                prs = Presentation(file_path)
-
-                text = []
-                for slide in prs.slides:
-                    for shape in slide.shapes:
-                        if hasattr(shape, "text") and shape.text.strip():
-                            text.append(shape.text)
-
-                documents.append(Document(page_content="\n".join(text)))
-
-            elif suffix == ".xlsx":
-                df = pd.read_excel(file_path)
-                text = df.to_string(index=False)
+        elif suffix == ".docx":
+            text = extract_docx_text(file_path)
+            if text.strip():
                 documents.append(Document(page_content=text))
+            else:
+                st.warning("DOCX contains no extractable text")
 
-        except Exception as e:
-            st.error(f"File processing failed: {str(e)}")
+        elif suffix == ".pptx":
+            prs = Presentation(file_path)
+            text_parts = []
+
+            for slide in prs.slides:
+                for shape in slide.shapes:
+                    if hasattr(shape, "text") and shape.text and shape.text.strip():
+                        text_parts.append(shape.text.strip())
+
+            text = "\n".join(text_parts).strip()
+            if text:
+                documents.append(Document(page_content=text))
+            else:
+                st.warning("PPTX contains no extractable text")
+
+        elif suffix == ".xlsx":
+            excel_file = pd.ExcelFile(file_path)
+            sheet_texts = []
+
+            for sheet in excel_file.sheet_names:
+                df = pd.read_excel(file_path, sheet_name=sheet)
+                sheet_texts.append(f"Sheet: {sheet}")
+                sheet_texts.append(df.to_string(index=False))
+
+            text = "\n\n".join(sheet_texts).strip()
+            if text:
+                documents.append(Document(page_content=text))
+            else:
+                st.warning("Excel contains no extractable text")
+
+        else:
+            st.error(f"Unsupported file type: {suffix}")
+            return []
+
+    except Exception as e:
+        st.error(f"File processing failed: {str(e)}")
+        return []
 
     return documents
 
 
-def safe_json_parse(response):
-    try:
-        return json.loads(response)
-    except:
-        match = re.search(r"\{.*\}", response, re.DOTALL)
-        if match:
-            try:
-                return json.loads(match.group())
-            except:
-                pass
-    return {"error": "Invalid JSON output", "raw_response": response[:500]}
-
-
-def generate_resume_summary(data):
-    prompt = f"""
-Create a professional resume summary.
-Write candidate name at the top.
-Write education, certification and expereince in concise bullet points.
-STRICT RULES:
-- No markdown
-- No ** or *
-- Plain text only
-{json.dumps(data)}
-"""
-    return tracked_llm_call(prompt).content
-
-    
 def create_vectorstore(docs):
-
     if not docs:
-        st.error("❌ No documents to index")
         return None
 
     splitter = RecursiveCharacterTextSplitter(
@@ -446,9 +391,7 @@ def create_vectorstore(docs):
     )
 
     chunks = splitter.split_documents(docs)
-
     if not chunks:
-        st.error("❌ No chunks created")
         return None
 
     for chunk in chunks:
@@ -458,212 +401,269 @@ def create_vectorstore(docs):
 
     try:
         emb = get_embeddings(st.session_state["api_key"])
-
-        vectorstore = Chroma.from_documents(
-            chunks,
-            embedding=emb
-        )
-
+        vectorstore = Chroma.from_documents(chunks, embedding=emb)
         return vectorstore
-
-    except Exception as e:
-        import traceback
+    except Exception:
         st.error("🚨 Vectorstore creation failed")
         st.code(traceback.format_exc())
         return None
 
-import time
 
-def tracked_llm_call(prompt):
-    import time
+def get_invoice_filename_from_data(data):
+    if not isinstance(data, dict):
+        return "invoice_data.xlsx"
 
-    llm = get_llm(
-        st.session_state["api_key"],
-        st.session_state.get("model_choice", "gpt-4o-mini")
+    invoice_name = (
+        data.get("invoice_number")
+        or data.get("invoice_no")
+        or data.get("invoice_id")
+        or data.get("bill_number")
+        or data.get("vendor")
+        or data.get("supplier")
+        or data.get("name")
+        or "invoice_data"
     )
 
-    start = time.time()
-    response = llm.invoke(prompt)
-    duration = time.time() - start
+    safe_name = re.sub(r'[\\/*?:"<>|]', "", str(invoice_name)).strip()
+    safe_name = safe_name if safe_name else "invoice_data"
+    return f"{safe_name}.xlsx"
+
+
+def get_suggested_questions(doc_type):
+    if doc_type == "invoice":
+        return [
+            "What is the total amount?",
+            "Who is the vendor?",
+            "What is the invoice date?",
+            "List all line items"
+        ]
+    elif doc_type == "resume":
+        return [
+            "Summarize this candidate",
+            "What skills does the candidate have?",
+            "What is the experience?",
+            "What is the education background?"
+        ]
+    elif doc_type == "report":
+        return [
+            "What is this report about?",
+            "Identify the document flow",
+            "What are the key points?",
+            "What are the main sections?"
+        ]
+    elif doc_type == "ticket":
+        return [
+            "What is the ticket number?",
+            "What is the travel date?",
+            "What is the total amount?",
+            "What are the key details?"
+        ]
+    else:
+        return [
+            "What is this document?",
+            "What are the key points?",
+            "Extract important information"
+        ]
+
+
+def normalize_graph_result(result):
+    if not isinstance(result, dict):
+        return {
+            "doc_type": None,
+            "structured_data": None,
+            "result": {},
+            "error": "Graph returned non-dict output"
+        }
+
+    doc_type = result.get("doc_type") or result.get("type")
+    structured_data = result.get("data") if doc_type in ["invoice", "ticket"] else None
+
+    inner = result.get("result", {})
+    if not isinstance(inner, dict):
+        inner = {}
+
+    if not inner:
+        inner = {
+            "type": result.get("result_type") or doc_type,
+            "file": result.get("file"),
+            "excel": result.get("excel"),
+            "table": result.get("table"),
+            "payload": result.get("payload"),
+            "message": result.get("message"),
+            "file_name": result.get("file_name"),
+            "data": result.get("data"),
+        }
+
+    return {
+        "doc_type": doc_type,
+        "structured_data": structured_data,
+        "result": inner,
+        "error": result.get("error"),
+    }
+
+
+def process_uploaded_document(uploaded_file):
+    current_file = uploaded_file.name
+    st.session_state.current_file = current_file
+
+    if current_file not in st.session_state.doc_metrics:
+        st.session_state.doc_metrics[current_file] = {
+            "tokens": 0,
+            "response_times": [],
+            "calls": 0
+        }
+
+    docs = process_file(uploaded_file)
+    if not docs:
+        raise ValueError("Failed to process document")
+
+    full_text = "\n".join(
+        [
+            str(d.page_content)
+            for d in docs
+            if d is not None and getattr(d, "page_content", None)
+        ]
+    ).strip()
+
+    if not full_text:
+        raise ValueError("No text extracted from document")
+
+    vectorstore = create_vectorstore(docs)
+
+    graph = build_graph()
+    graph_input = {
+        "text": full_text,
+        "template": st.session_state.get("resume_template"),
+        "filename": uploaded_file.name,
+        "progress": update_progress,
+    }
 
     try:
-        usage = getattr(response, "response_metadata", {}).get("token_usage", {})
-        input_tokens = usage.get("prompt_tokens", 0)
-        output_tokens = usage.get("completion_tokens", 0)
-    except:
-        input_tokens = len(str(prompt)) // 4
-        output_tokens = len(str(response.content)) // 4
+        raw_result = graph.invoke(graph_input)
+    except Exception as e:
+        raise RuntimeError(f"Auto processing failed: {str(e)}") from e
 
-    total_tokens = input_tokens + output_tokens
+    normalized = normalize_graph_result(raw_result)
 
-    input_cost = input_tokens * 0.00015 / 1000
-    output_cost = output_tokens * 0.0006 / 1000
-    total_cost = input_cost + output_cost
+    doc_type = normalized.get("doc_type")
+    structured_data = normalized.get("structured_data")
+    result = normalized.get("result", {})
+    error = normalized.get("error")
 
-    # GLOBAL
-    m = st.session_state.metrics
-    m["tokens"] += total_tokens
-    m["input_tokens"] += input_tokens
-    m["output_tokens"] += output_tokens
-    m["cost"] += total_cost
-    m["calls"] += 1
-    m["response_times"].append(duration)
+    if error:
+        raise RuntimeError(str(error))
 
-    # DOCUMENT
-    doc = st.session_state.get("current_file") or "unknown"
+    if not doc_type:
+        raise ValueError("Document type could not be determined by workflow")
 
-    if doc not in st.session_state.doc_costs:
-        st.session_state.doc_costs[doc] = {"cost": 0, "tokens": 0}
+    if doc_type not in ["invoice", "ticket"]:
+        structured_data = None
 
-    st.session_state.doc_costs[doc]["cost"] += total_cost
-    st.session_state.doc_costs[doc]["tokens"] += total_tokens
+    st.session_state.full_text = full_text
+    st.session_state.vectorstore = vectorstore
+    st.session_state.doc_type = doc_type
+    st.session_state.structured_data = structured_data
+    st.session_state.auto_result = {
+        "doc_type": doc_type,
+        "structured_data": structured_data,
+        "result": result
+    }
+    st.session_state.suggested_questions = get_suggested_questions(doc_type)
 
-    return response
+    if doc_type == "resume":
+        st.session_state.generated_resume = result.get("file")
 
+    return st.session_state.auto_result
 
-def update_progress(percent, message):
-    if "progress_bar" not in st.session_state:
-        st.session_state.progress_bar = st.progress(0)
-
-    st.session_state.progress_bar.progress(percent, text=message)
-    
 # ------------------------------
-# PROCESSING WITH PROGRESS
+# SIDEBAR
 # ------------------------------
+with st.sidebar:
+    st.markdown("### 👤 User Info")
+    st.write(f"**User:** {st.session_state['user']}")
+    st.write(f"**Role:** {st.session_state['role']}")
+    st.success("🔑 API key loaded securely")
+
+    st.markdown("### 🤖 Model")
+    model_choice = st.selectbox(
+        "Choose Model",
+        ["gpt-4o-mini", "gpt-4o", "gpt-5"],
+        index=["gpt-4o-mini", "gpt-4o", "gpt-5"].index(st.session_state.get("model_choice", "gpt-4o-mini"))
+    )
+    st.session_state["model_choice"] = model_choice
+    st.caption(f"Using: {st.session_state['model_choice']}")
+
+    if st.button("🚪 Logout"):
+        for key in ["logged_in", "user", "role", "api_key"]:
+            if key in st.session_state:
+                del st.session_state[key]
+        st.success("Logged out")
+        st.rerun()
+
+    st.markdown("### ⚙️ Processing Mode")
+    st.success("Auto (LangGraph)")
+
+    template_file = st.file_uploader(
+        "Upload Resume Template (Optional)",
+        type=["docx"],
+        key="sidebar_resume_template"
+    )
+    if template_file:
+        st.session_state["resume_template"] = template_file.getvalue()
+
+    st.markdown("---")
+    cost = st.session_state.get("metrics", {}).get("cost", 0)
+    st.write(f"Session Cost 💰 ${round(cost, 6)}")
+
+# ------------------------------
+# HEADER
+# ------------------------------
+logo_path = Path(__file__).parent / "IDP-Logo1.png"
+col1, col2 = st.columns([1, 7], gap="small")
+
+with col1:
+    if logo_path.exists():
+        st.image(logo_path, width=280)
+
+with col2:
+    st.markdown("## Intelligent Document Processor")
+    st.caption("AI-powered document understanding & automation")
+
+# ------------------------------
+# FILE UPLOAD
+# ------------------------------
+uploaded_file = st.file_uploader(
+    "Drag and drop file here",
+    type=["txt", "pdf", "docx", "pptx", "xlsx", "png", "jpg", "jpeg"]
+)
 
 if uploaded_file:
-
-    import hashlib
     file_hash = hashlib.md5(uploaded_file.getvalue()).hexdigest()
 
     if st.session_state.get("file_hash") != file_hash:
-
-        st.session_state.vectorstore = None
-        st.session_state.chat_history = []
-        st.session_state.full_text = None
-        st.session_state.suggested_questions = []
-
-        current_file = uploaded_file.name
-        st.session_state.current_file = current_file
-
-        if current_file not in st.session_state.doc_metrics:
-            st.session_state.doc_metrics[current_file] = {
-                "tokens": 0,
-                "response_times": [],
-                "calls": 0
-            }
-
-        progress = st.progress(0, text="Processing Started...")
-
-        docs = process_file(uploaded_file)
-
-        if not docs:
-            st.error("❌ Failed to process document")
-            st.stop()
-
-        progress.progress(20, text="File processed")
-
-        st.session_state.full_text = "\n".join(
-            [
-                str(d.page_content)
-                for d in docs
-                if d is not None and getattr(d, "page_content", None)
-            ]
-        )
-
-        # ------------------------------
-        # AUTO MODE (LangGraph)
-        # ------------------------------
-        if st.session_state.get("mode") == "Auto (LangGraph)":
-        
-            graph = build_graph()
-        
-            with st.spinner("🤖 Running Auto Processing..."):
-        
-                result = graph.invoke({
-                    "text": st.session_state.full_text,
-                    "template": st.session_state.get("resume_template"),
-                    "progress": update_progress if "update_progress" in globals() else None
-                })
-        
-            st.session_state.auto_result = result
-
-            st.session_state.doc_type = result.get("doc_type")
-        
-            st.success(f"Auto Processed → {result['doc_type'].upper()}")
-        
-        # ------------------------------
-        # CONTINUE MANUAL FLOW
-        # ------------------------------
-        else:
-        
-            if not st.session_state.full_text.strip():
-                st.error("❌ No text extracted (possibly scanned or empty)")
-                st.stop()
-        
-            progress.progress(40, text="Text extracted")
-        
-            st.session_state.doc_type = detect_document_type(st.session_state.full_text)
-            progress.progress(60, text="Document type detected")
-        
-            st.session_state.structured_data = extract_structured_json(
-                st.session_state.full_text,
-                st.session_state.doc_type
-            )
-            progress.progress(80, text="Structured data extracted")
-        
-            st.session_state.vectorstore = create_vectorstore(docs)
-        
-            progress.progress(100, text="Vector index created")
-            
-        # Suggested questions
-        doc_type = st.session_state.doc_type
-
-        if doc_type == "invoice":
-            st.session_state.suggested_questions = [
-                "What is the total amount?",
-                "Who is the vendor?",
-                "What is the invoice date?",
-                "List all line items"
-            ]
-
-        elif doc_type == "resume":
-            st.session_state.suggested_questions = [
-                "Summarize this candidate",
-                "What skills does the candidate have?",
-                "What is the experience?",
-                "What is the education background?"
-            ]
-
-        elif doc_type == "report":
-            st.session_state.suggested_questions = [
-                "what is this report about",
-                "identify the document flow",
-                "What are the key points?",
-                "What are the main sections?"
-            ]
-
-        else:
-            st.session_state.suggested_questions = [
-                "What is this document",
-                "What are the key points?",
-                "Extract important information"
-            ]
-
-        st.session_state.processed_file = uploaded_file.name
+        reset_document_state()
         st.session_state.file_hash = file_hash
 
-    doc_type = st.session_state.get("doc_type")
+        progress = st.progress(0, text="Processing started...")
 
-    if doc_type:
-        st.success(f"✅ Processed Successfully | Type: {doc_type.upper()}")
-        
+        try:
+            progress.progress(15, text="Reading uploaded document...")
+            process_uploaded_document(uploaded_file)
+            progress.progress(100, text="Processing completed")
+            st.success(f"✅ Processed Successfully | Type: {st.session_state.doc_type.upper()}")
+
+        except Exception as e:
+            st.session_state.processing_error = str(e)
+            progress.empty()
+            st.error(f"❌ {str(e)}")
+            st.code(traceback.format_exc())
+    else:
+        if st.session_state.get("doc_type"):
+            st.success(f"✅ Processed Successfully | Type: {st.session_state.doc_type.upper()}")
+
 # ------------------------------
 # TABS
 # ------------------------------
-
-#tabs = ["Preview", "JSON", "Chat", "Download", "Concur"]
-#tabs = ["Preview", "JSON", "Download", "Concur", "Chat", "Metrics"]
 tabs = ["Preview", "JSON", "Download", "Concur", "Chat", "Auto", "Metrics"]
 
 selected_tab = st.radio(
@@ -673,78 +673,82 @@ selected_tab = st.radio(
     key="active_tab"
 )
 
+# ------------------------------
 # PREVIEW
+# ------------------------------
 if selected_tab == "Preview":
     if uploaded_file:
         if "pdf" in uploaded_file.type:
             pdf_viewer(uploaded_file.getvalue(), height=200)
+
         elif "image" in uploaded_file.type:
             st.image(uploaded_file, width=300)
+
         elif "text" in uploaded_file.type:
             try:
                 preview_text = uploaded_file.getvalue().decode("utf-8")
-            except:
+            except Exception:
                 preview_text = uploaded_file.getvalue().decode("cp1252", errors="ignore")
             st.text_area("Preview", preview_text, height=200)
+
         elif "word" in uploaded_file.type or uploaded_file.name.endswith(".docx"):
             path = save_temp_file(uploaded_file)
-            doc = DocxDocument(path)
-            text = "\n".join([p.text for p in doc.paragraphs if p.text.strip()])
-            st.text_area("DOCX Preview", text, height=200)
+            text = extract_docx_text(path)
+            st.text_area("DOCX Preview", text, height=250)
+
         elif uploaded_file.name.endswith(".pptx"):
-            from pptx import Presentation
             path = save_temp_file(uploaded_file)
             prs = Presentation(path)
             slides_text = []
+
             for i, slide in enumerate(prs.slides):
-                slide_text = [f"Slide {i+1}"]
-        
+                slide_text = [f"Slide {i + 1}"]
                 for shape in slide.shapes:
-                    if hasattr(shape, "text") and shape.text.strip():
+                    if hasattr(shape, "text") and shape.text and shape.text.strip():
                         slide_text.append(shape.text.strip())
-        
                 slides_text.append("\n".join(slide_text))
+
             st.text_area("PPTX Preview", "\n\n".join(slides_text), height=300)
+
         elif uploaded_file.name.endswith(".xlsx"):
-            import pandas as pd
             path = save_temp_file(uploaded_file)
             df = pd.read_excel(path)
             st.dataframe(df)
-            # Optional text preview (for consistency with RAG)
             st.text_area("Excel Preview (Text)", df.to_string(index=False), height=200)
 
+# ------------------------------
 # JSON
+# ------------------------------
 if selected_tab == "JSON":
-    if st.session_state.structured_data:
-        st.json(st.session_state.structured_data)
+    doc_type = st.session_state.get("doc_type")
+    data = st.session_state.get("structured_data")
+
+    if not uploaded_file:
+        st.info("Upload and process a document first")
+    elif doc_type in ["invoice", "ticket"] and data:
+        st.json(data)
+    elif doc_type in ["invoice", "ticket"]:
+        st.warning("No structured JSON available")
+    else:
+        st.info("JSON view is only available for invoice and ticket documents")
 
 # ------------------------------
 # CHAT
 # ------------------------------
 if selected_tab == "Chat":
-
-    # ❗ If no document processed
     if st.session_state.vectorstore is None:
         st.warning("Please upload and process a document first")
-
     else:
-        # ------------------------------
-        # 🎯 Suggested Questions FIRST
-        # ------------------------------
         if st.session_state.suggested_questions:
             st.markdown("### 💡 Suggested Questions")
-
             cols = st.columns(len(st.session_state.suggested_questions))
 
             for i, q in enumerate(st.session_state.suggested_questions):
                 if cols[i].button(q, key=f"suggest_{i}"):
-
-                    # Add user question
                     st.session_state.chat_history.append(
                         {"role": "user", "content": q}
                     )
 
-                    # Retrieve context
                     docs = st.session_state.vectorstore.similarity_search(
                         q,
                         k=2,
@@ -752,149 +756,139 @@ if selected_tab == "Chat":
                     )
                     context = "\n\n".join([d.page_content[:800] for d in docs])
 
-                    # Generate response
                     response = tracked_llm_call(
                         f"""
-                    You are a strict document QA assistant.
-                    
-                    RULES:
-                    - Answer ONLY from the provided context
-                    - DO NOT add external knowledge
-                    - DO NOT assume anything
-                    - If partially found, return best matching value
-                    - Keep answer concise and factual
-                    - NO markdown, NO formatting
-                    
-                    CONTEXT:
-                    {context}
-                    
-                    QUESTION:
-                    {q}
-                    """
+You are a strict document QA assistant.
+
+RULES:
+- Answer ONLY from the provided context
+- DO NOT add external knowledge
+- DO NOT assume anything
+- If partially found, return the best matching value
+- Keep answer concise and factual
+- NO markdown, NO formatting
+
+CONTEXT:
+{context}
+
+QUESTION:
+{q}
+"""
                     ).content
 
-                    # Store response
                     st.session_state.chat_history.append(
                         {"role": "assistant", "content": response}
                     )
-
-                    # Show response immediately
                     st.text(response)
 
-        # ------------------------------
-        # 💬 Chat History
-        # ------------------------------
         for msg in st.session_state.chat_history:
             with st.chat_message(msg["role"]):
                 st.write(msg["content"])
 
-        # ------------------------------
-        # ✏️ User Input
-        # ------------------------------
         query = st.chat_input("Ask a question")
 
         if query:
-            # Add user message
             st.session_state.chat_history.append(
                 {"role": "user", "content": query}
             )
 
-            # Retrieve context
             docs = st.session_state.vectorstore.similarity_search(
-                query,   
+                query,
                 k=2,
                 filter={"source": st.session_state.current_file}
             )
             context = "\n\n".join([d.page_content for d in docs])
 
-            # Generate response
             response = tracked_llm_call(
                 f"Answer strictly from context.\nContext:\n{context}\nQ:{query}"
             ).content
 
-            # Store response
             st.session_state.chat_history.append(
                 {"role": "assistant", "content": response}
             )
-
-            # Display response
             st.write(response)
-            
+
+# ------------------------------
 # DOWNLOAD
+# ------------------------------
 if selected_tab == "Download":
-    if st.session_state.structured_data:
-        st.download_button("Download JSON", json.dumps(st.session_state.structured_data, indent=2), "data.json")
+    if not uploaded_file:
+        st.info("Upload and process a document first")
+    elif st.session_state.get("processing_error"):
+        st.error(st.session_state.processing_error)
+    else:
+        doc_type = st.session_state.get("doc_type")
+        auto_result = st.session_state.get("auto_result") or {}
+        result = auto_result.get("result", {}) if isinstance(auto_result, dict) else {}
+        data = st.session_state.get("structured_data")
 
-        if st.session_state.doc_type == "invoice":
+        if doc_type == "resume":
+            resume_file = result.get("file") or st.session_state.get("generated_resume")
 
-            df = json_to_kv_dataframe(st.session_state.structured_data)
-            st.dataframe(df)
-
-            excel = generate_excel(df)
-
-            # 🎯 Extract meaningful invoice name
-            data = st.session_state.structured_data
-
-            invoice_name = (
-                data.get("invoice_number")
-                or data.get("invoice_no")
-                or data.get("invoice_id")
-                or data.get("bill_number")
-                or data.get("vendor")
-                or data.get("supplier")
-                or data.get("name")
-                or "invoice_data"
-            )
-
-            # Clean filename
-            safe_name = re.sub(r'[\\/*?:"<>|]', "", str(invoice_name))
-
-            file_name = f"{safe_name}.xlsx"
-
-            # ✅ Show filename
-            st.caption(f"📄 {file_name}")
-
-            st.download_button(
-                "Download Excel",
-                excel,
-                file_name
-            )
-
-        if st.session_state.doc_type == "resume":
-
-            template_file = st.file_uploader("Upload Resume Template", type=["docx"])
-
-            if template_file:
-                st.session_state.generated_resume = build_resume(
-                    st.session_state.structured_data,
-                    template_file
-                )
-
-            if st.session_state.generated_resume:
-
-                data = st.session_state.structured_data
-
-                name = (
-                    data.get("name")
-                    or data.get("Name")
-                    or data.get("candidate_name")
-                    or (data.get("personal_details", {}).get("name") if isinstance(data.get("personal_details"), dict) else None)
-                    or "candidate"
-                )
-
-                safe_name = re.sub(r'[\\/*?:"<>|]', "", name)
-
-            # ✅ ADD THIS to display created file name
-                file_name = f"{safe_name}.docx"
+            if resume_file:
+                file_name = result.get("file_name") or "generated_resume.docx"
                 st.caption(f"📄 {file_name}")
-
                 st.download_button(
                     "Download Resume",
-                    st.session_state.generated_resume,
-                    f"{safe_name}.docx"
+                    data=resume_file,
+                    file_name=file_name,
+                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                )
+            else:
+                st.error("Resume file missing from auto workflow output")
+
+        elif doc_type == "invoice":
+            if data:
+                st.download_button(
+                    "Download JSON",
+                    json.dumps(data, indent=2),
+                    "data.json",
+                    mime="application/json"
                 )
 
+                df = None
+                try:
+                    df = result.get("table")
+                    if df is None:
+                        df = json_to_kv_dataframe(data)
+                except Exception:
+                    df = json_to_kv_dataframe(data)
+
+                if isinstance(df, pd.DataFrame):
+                    st.dataframe(df, use_container_width=True)
+                    excel = result.get("excel") or generate_excel(df)
+
+                    file_name = get_invoice_filename_from_data(data)
+                    st.caption(f"📄 {file_name}")
+
+                    st.download_button(
+                        "Download Excel",
+                        excel,
+                        file_name
+                    )
+                else:
+                    st.warning("Invoice table is not available")
+            else:
+                st.warning("No invoice JSON available")
+
+        elif doc_type == "ticket":
+            if data:
+                st.download_button(
+                    "Download JSON",
+                    json.dumps(data, indent=2),
+                    "data.json",
+                    mime="application/json"
+                )
+                st.success("Ticket JSON ready for download")
+            else:
+                st.warning("No ticket JSON available")
+
+        else:
+            st.info("No downloadable structured output available for this document type")
+
+# ------------------------------
 # CONCUR
+# ------------------------------
 if selected_tab == "Concur":
     st.subheader("Send to Concur Integration")
 
@@ -912,13 +906,23 @@ if selected_tab == "Concur":
         if st.button("Send to Concur"):
             progress = st.progress(0, text="Preparing payload...")
 
-            payload = {
-                "type": st.session_state.doc_type,
-                "data": st.session_state.structured_data,
-                "line_items": json_to_kv_dataframe(st.session_state.structured_data).to_dict(orient="records")
-            }
+            payload = None
+            auto_result = st.session_state.get("auto_result") or {}
+            result = auto_result.get("result", {}) if isinstance(auto_result, dict) else {}
 
-            import time
+            if result.get("payload"):
+                payload = result.get("payload")
+            else:
+                payload = {
+                    "type": st.session_state.doc_type,
+                    "data": st.session_state.structured_data,
+                    "line_items": (
+                        json_to_kv_dataframe(st.session_state.structured_data).to_dict(orient="records")
+                        if st.session_state.structured_data
+                        else []
+                    )
+                }
+
             progress.progress(40, text="Connecting...")
             time.sleep(1)
 
@@ -936,13 +940,13 @@ if selected_tab == "Concur":
 
             progress.progress(100, text="Completed")
             progress.empty()
-
             st.json(payload)
     else:
         st.warning("Only Invoice or Ticket supported")
 
+# ------------------------------
 # METRICS
-
+# ------------------------------
 if selected_tab == "Metrics":
     st.subheader("📊 Cost & Usage Analytics")
 
@@ -952,25 +956,19 @@ if selected_tab == "Metrics":
         st.warning("No usage yet")
         st.stop()
 
-    avg_time = sum(m["response_times"]) / m["calls"]
+    avg_time = sum(m["response_times"]) / m["calls"] if m["calls"] else 0
 
-    # ---- TOP KPIs ----
     col1, col2, col3, col4 = st.columns(4)
-
     col1.metric("💰 Total Cost ($)", round(m["cost"], 6))
     col2.metric("🧠 Total Tokens", m["tokens"])
     col3.metric("⚡ LLM Calls", m["calls"])
     col4.metric("⏱ Avg Time (s)", round(avg_time, 2))
 
     st.markdown("---")
-
-    # ---- TOKEN BREAKDOWN ----
     st.subheader("🔎 Token Breakdown")
-
     st.write(f"Input Tokens: {m['input_tokens']}")
     st.write(f"Output Tokens: {m['output_tokens']}")
 
-    # ---- COST OVER TIME ----
     if m["response_times"]:
         df = pd.DataFrame({
             "Call": list(range(len(m["response_times"]))),
@@ -978,31 +976,20 @@ if selected_tab == "Metrics":
         })
         st.line_chart(df.set_index("Call"))
 
-
-    # ---- DOCUMENT COST ----
     st.subheader("📄 Cost per Document")
-
     doc_data = [
         {"Document": k, "Cost": v["cost"], "Tokens": v["tokens"]}
         for k, v in st.session_state.doc_costs.items()
     ]
 
     doc_df = pd.DataFrame(doc_data)
-
     if not doc_df.empty:
-    
-        # ✅ Add Serial Number starting from 1
         doc_df.insert(0, "SL No", range(1, len(doc_df) + 1))
-    
         st.dataframe(doc_df, use_container_width=True, hide_index=True)
-        
-        # Chart stays same
         st.bar_chart(doc_df.set_index("Document")[["Cost"]])
-    
     else:
         st.info("No document-level cost recorded yet")
-        
-    # ---- COST ALERT ----
+
     if m["cost"] > 0.05:
         st.warning("⚠️ High usage detected (>$0.05)")
 
@@ -1010,60 +997,66 @@ if selected_tab == "Metrics":
 # AUTO OUTPUT TAB
 # ------------------------------
 if selected_tab == "Auto":
-
-    if st.session_state.get("mode") != "Auto (LangGraph)":
-        st.info("Switch to Auto Mode from sidebar to use this feature")
-
+    if not uploaded_file:
+        st.info("Upload a document to use Auto Mode")
+    elif st.session_state.get("processing_error"):
+        st.error(st.session_state.processing_error)
     elif not st.session_state.get("auto_result"):
-        st.warning("Upload and process a document in Auto Mode")
-
+        st.warning("No auto result available")
     else:
         st.subheader("🤖 Auto Processing Output")
 
-        result = st.session_state.auto_result
-        res = result.get("result", {})
-        doc_type = result.get("doc_type", "")
+        auto_result = st.session_state.auto_result
+        result = auto_result.get("result", {})
+        doc_type = auto_result.get("doc_type", "")
 
         st.write(f"📄 Detected Type: **{doc_type.upper()}**")
 
-        # ------------------------------
-        # RESUME DOWNLOAD
-        # ------------------------------
-        if res.get("type") == "resume":
-
-            st.success("✅ Resume generated successfully")
-
-            file = res.get("file")
+        if doc_type == "resume":
+            file = result.get("file") or st.session_state.get("generated_resume")
 
             if file:
+                file_name = result.get("file_name") or "generated_resume.docx"
+                st.success("✅ Resume generated successfully")
+                st.caption(f"📄 {file_name}")
+
                 st.download_button(
                     label="⬇️ Download Resume",
                     data=file,
-                    file_name="generated_resume.docx",
+                    file_name=file_name,
                     mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
                 )
             else:
-                st.error("Resume file missing")
+                st.error("Resume file missing from workflow output")
 
-        # ------------------------------
-        # INVOICE OUTPUT
-        # ------------------------------
-        elif res.get("type") == "invoice":
-
+        elif doc_type == "invoice":
             st.success("✅ Invoice processed")
 
-            st.dataframe(res.get("table"), use_container_width=True)
+            table = result.get("table")
+            if isinstance(table, pd.DataFrame):
+                st.dataframe(table, use_container_width=True)
+            elif st.session_state.get("structured_data"):
+                try:
+                    fallback_df = json_to_kv_dataframe(st.session_state.structured_data)
+                    st.dataframe(fallback_df, use_container_width=True)
+                except Exception:
+                    st.info("Invoice table not available")
 
-            st.download_button(
-                "⬇️ Download Excel",
-                res.get("excel"),
-                "invoice.xlsx"
-            )
+            excel = result.get("excel")
+            if excel:
+                st.download_button(
+                    "⬇️ Download Excel",
+                    excel,
+                    get_invoice_filename_from_data(st.session_state.get("structured_data") or {})
+                )
 
-        # ------------------------------
-        # TICKET OUTPUT
-        # ------------------------------
-        elif res.get("type") == "ticket":
+        elif doc_type == "ticket":
+            st.success("✅ Ticket processed")
+            if st.session_state.get("structured_data"):
+                st.json(st.session_state.structured_data)
+            elif result.get("message"):
+                st.info(result.get("message"))
 
-            st.success("✅ Sent to Concur (simulated)")
-            st.success("Sent to Concur (simulated)")
+        else:
+            msg = result.get("message") or "Processing completed"
+            st.success(f"✅ {msg}")
