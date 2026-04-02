@@ -656,72 +656,65 @@ def render_empty_state():
 
 def render_resume_result(result):
     st.success(result.get("message", "Resume generated successfully"))
+
     file_name = result.get("file_name", "generated_resume.docx")
-    st.caption(f"Output File: {file_name}")
-
     file_bytes = result.get("file")
-    if file_bytes:
-        st.download_button(
-            "Download Resume",
-            data=file_bytes,
-            file_name=file_name,
-            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            use_container_width=True
-        )
-
     data = result.get("data", {}) or {}
+
+    top1, top2 = st.columns([2, 1])
+
+    with top1:
+        st.caption(f"Output File: {file_name}")
+
+    with top2:
+        if file_bytes:
+            st.download_button(
+                "Download Resume",
+                data=file_bytes,
+                file_name=file_name,
+                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                use_container_width=True
+            )
+
     c1, c2 = st.columns([1, 1])
 
     with c1:
         st.markdown("#### Candidate")
         st.write(data.get("name", ""))
-        st.write(data.get("email", ""))
-        st.write(data.get("phone", ""))
-        st.write(data.get("location", ""))
+        st.caption(data.get("email", ""))
+        st.caption(data.get("phone", ""))
+        st.caption(data.get("location", ""))
 
         st.markdown("#### Skills")
         skills = data.get("skills", [])
-        if skills:
-            st.write(", ".join(skills))
-        else:
-            st.caption("No skills found")
+        st.caption(", ".join(skills[:15]) if skills else "No skills found")
 
     with c2:
         st.markdown("#### Summary")
         st.text_area(
             "Summary",
             value=data.get("summary", ""),
-            height=140,
+            height=110,
             label_visibility="collapsed"
         )
 
     st.markdown("#### Experience")
     experience = data.get("experience", [])
     if experience:
-        for exp in experience[:3]:
+        for exp in experience[:2]:
             st.markdown(
                 f"**{exp.get('role', '')}** - {exp.get('company', '')}  \n"
                 f"{exp.get('start_date', '')} - {exp.get('end_date', '')}"
             )
-            for item in exp.get("description", [])[:2]:
+            for item in exp.get("description", [])[:1]:
                 st.caption(f"- {item}")
             st.markdown("---")
     else:
         st.caption("No experience found")
-
-    st.markdown("#### Education")
-    education = data.get("education", [])
-    if education:
-        for edu in education[:2]:
-            st.markdown(
-                f"**{edu.get('degree', '')}** - {edu.get('institution', '')}  \n"
-                f"{edu.get('graduation_date', '') or (str(edu.get('start_date', '')) + ' - ' + str(edu.get('end_date', '')))}"
-            )
-    else:
-        st.caption("No education found")
-
+        
 def render_invoice_result(result):
     st.success(result.get("message", "Invoice processed successfully"))
+
     data = st.session_state.get("structured_data", {}) or {}
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Vendor", str(data.get("vendor") or data.get("supplier") or "-"))
@@ -735,14 +728,14 @@ def render_invoice_result(result):
             "Download Excel",
             excel,
             get_invoice_filename_from_data(data),
-            use_container_width=True
+            use_container_width=False
         )
 
     table = result.get("table")
     if table is not None:
         st.markdown("#### Extracted Fields")
-        st.dataframe(table, use_container_width=True, hide_index=True)
-
+        st.dataframe(table, use_container_width=True, height=220, hide_index=True)
+        
 def render_ticket_result(result):
     st.success(result.get("message", "Ticket processed successfully"))
     data = st.session_state.get("structured_data", {}) or {}
@@ -762,7 +755,12 @@ def render_generic_result(result):
     text = st.session_state.get("full_text", "")
     if text:
         st.markdown("#### Extracted Preview")
-        st.text_area("Preview", value=text[:5000], height=300, label_visibility="collapsed")
+        st.text_area(
+            "Preview",
+            value=text[:2500],
+            height=180,
+            label_visibility="collapsed"
+        )
 
 def render_result_workspace():
     st.markdown("### Result Workspace")
@@ -835,30 +833,23 @@ def render_agent_activity_panel():
         else:
             st.caption("No logs available")
 
-    with st.expander("Auto Mode Usage", expanded=True):
+    with st.expander("Usage", expanded=False):
         auto_metrics = (st.session_state.get("auto_result") or {}).get("metrics", {}) or {}
         c1, c2 = st.columns(2)
         c1.metric("Calls", auto_metrics.get("calls", 0))
         c2.metric("Cost", f"${auto_metrics.get('cost', 0.0):.6f}")
-        c3, c4 = st.columns(2)
-        c3.metric("Input Tokens", auto_metrics.get("input_tokens", 0))
-        c4.metric("Output Tokens", auto_metrics.get("output_tokens", 0))
 
         step_metrics = (st.session_state.get("auto_result") or {}).get("step_metrics", []) or []
         if step_metrics:
-            st.markdown("#### Step Breakdown")
             rows = []
             for item in step_metrics:
                 rows.append({
                     "Step": item.get("step"),
-                    "Calls": item.get("metrics", {}).get("calls", 0),
-                    "Input Tokens": item.get("metrics", {}).get("input_tokens", 0),
-                    "Output Tokens": item.get("metrics", {}).get("output_tokens", 0),
                     "Cost ($)": round(item.get("metrics", {}).get("cost", 0.0), 6),
                     "Duration (s)": round(item.get("duration", 0.0), 2),
                 })
-            st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
-
+            st.dataframe(pd.DataFrame(rows), use_container_width=True, height=180, hide_index=True)
+            
 def render_details_section():
     st.markdown("---")
     st.markdown("### Details")
@@ -889,11 +880,11 @@ def render_details_section():
 # ------------------------------
 def render_header():
     logo_path = Path(__file__).parent / "IDP-Logo1.png"
-    c0, c1, c2, c3, c4, c5, c6 = st.columns([1.3, 2, 1, 1, 1, 1, 1])
+    c0, c1, c2, c3 = st.columns([1.2, 4, 1.2, 1.2])
 
     with c0:
         if logo_path.exists():
-            st.image(logo_path, width=160)
+            st.image(logo_path, width=140)
 
     with c1:
         st.markdown("## Intelligent Document Processor")
@@ -901,22 +892,10 @@ def render_header():
         st.write(f"File: {st.session_state.get('current_file') or 'No file uploaded'}")
 
     with c2:
-        doc_type = st.session_state.get("doc_type") or "-"
-        st.metric("Type", doc_type.upper() if doc_type != "-" else "-")
-
-    with c3:
         st.metric("Status", st.session_state.get("agent_status", "Idle"))
 
-    with c4:
+    with c3:
         st.metric("Elapsed", f"{st.session_state.get('elapsed_time', 0.0):.1f}s")
-
-    with c5:
-        calls = st.session_state.get("metrics", {}).get("calls", 0)
-        st.metric("LLM Calls", calls)
-
-    with c6:
-        cost = st.session_state.get("metrics", {}).get("cost", 0.0)
-        st.metric("Cost", f"${cost:.6f}")
 
 def render_upload_controls():
     with st.sidebar:
@@ -929,7 +908,9 @@ def render_upload_controls():
         model_choice = st.selectbox(
             "Choose Model",
             ["gpt-4o-mini", "gpt-4o", "gpt-5"],
-            index=["gpt-4o-mini", "gpt-4o", "gpt-5"].index(st.session_state.get("model_choice", "gpt-4o-mini"))
+            index=["gpt-4o-mini", "gpt-4o", "gpt-5"].index(
+                st.session_state.get("model_choice", "gpt-4o-mini")
+            )
         )
         st.session_state["model_choice"] = model_choice
 
@@ -955,7 +936,7 @@ def render_upload_controls():
         cost = st.session_state.get("metrics", {}).get("cost", 0)
         st.write(f"Session Cost 💰 ${round(cost, 6)}")
 
-    c1, c2, c3 = st.columns([3, 1, 1])
+    c1, c2 = st.columns([5, 1])
 
     with c1:
         uploaded_file = st.file_uploader(
@@ -965,20 +946,14 @@ def render_upload_controls():
         )
 
     with c2:
-        st.selectbox(
-            "Model",
-            ["gpt-4o-mini", "gpt-4o", "gpt-5"],
-            key="model_choice_top"
-        )
-        st.session_state["model_choice"] = st.session_state["model_choice_top"]
-
-    with c3:
-        if st.button("Reset Session", use_container_width=True):
+        st.write("")
+        st.write("")
+        if st.button("Reset", use_container_width=True):
             reset_document_state()
             st.rerun()
 
     return uploaded_file
-
+    
 # ------------------------------
 # MAIN
 # ------------------------------
@@ -1011,7 +986,7 @@ if uploaded_file:
         if st.session_state.get("doc_type"):
             st.success(f"✅ Processed Successfully | Type: {st.session_state.doc_type.upper()}")
 
-left_col, right_col = st.columns([1, 2], gap="large")
+left_col, right_col = st.columns([1, 1.6], gap="large")
 
 with left_col:
     render_agent_activity_panel()
