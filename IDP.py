@@ -986,13 +986,13 @@ def render_upload_controls():
         st.markdown("### ⚙️ Processing Mode")
         st.success("Auto (LangGraph)")
 
-        template_file = st.file_uploader(
-            "Resume Template (optional)",
-            type=["docx"],
-            key="sidebar_resume_template"
-        )
-        if template_file:
-            st.session_state["resume_template"] = template_file.getvalue()
+        #template_file = st.file_uploader(
+        #    "Resume Template (optional)",
+        #    type=["docx"],
+        #    key="sidebar_resume_template"
+        #)
+        #if template_file:
+        #    st.session_state["resume_template"] = template_file.getvalue()
 
         st.markdown("---")
         cost = st.session_state.get("metrics", {}).get("cost", 0)
