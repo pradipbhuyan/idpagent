@@ -10,16 +10,11 @@ from docx import Document as DocxDocument
 from langchain_openai import ChatOpenAI
 from streamlit import session_state as st_state
 
-
-# ------------------------------
-# METRICS / LLM TRACKING
-# ------------------------------
 MODEL_PRICING = {
     "gpt-4o-mini": {"input_per_1k": 0.00015, "output_per_1k": 0.0006},
     "gpt-4o": {"input_per_1k": 0.005, "output_per_1k": 0.015},
-    "gpt-5": {"input_per_1k": 0.0, "output_per_1k": 0.0},  # set real values if you want exact cost
+    "gpt-5": {"input_per_1k": 0.0, "output_per_1k": 0.0},
 }
-
 
 def ensure_metrics_state():
     if "metrics" not in st_state:
@@ -35,25 +30,35 @@ def ensure_metrics_state():
     if "doc_costs" not in st_state:
         st_state["doc_costs"] = {}
 
+def get_current_metrics_snapshot():
+    ensure_metrics_state()
+    m = st_state["metrics"]
+    return {
+        "tokens": m.get("tokens", 0),
+        "input_tokens": m.get("input_tokens", 0),
+        "output_tokens": m.get("output_tokens", 0),
+        "cost": m.get("cost", 0.0),
+        "calls": m.get("calls", 0),
+    }
+
+def diff_metrics_snapshot(before, after):
+    return {
+        "tokens": after.get("tokens", 0) - before.get("tokens", 0),
+        "input_tokens": after.get("input_tokens", 0) - before.get("input_tokens", 0),
+        "output_tokens": after.get("output_tokens", 0) - before.get("output_tokens", 0),
+        "cost": after.get("cost", 0.0) - before.get("cost", 0.0),
+        "calls": after.get("calls", 0) - before.get("calls", 0),
+    }
 
 def get_model_pricing(model_name: str):
-    return MODEL_PRICING.get(
-        model_name,
-        MODEL_PRICING.get("gpt-4o-mini")
-    )
-
+    return MODEL_PRICING.get(model_name, MODEL_PRICING.get("gpt-4o-mini"))
 
 def invoke_llm_tracked(prompt: str):
     if "api_key" not in st_state:
         raise ValueError("Missing API key")
 
     model_name = st_state.get("model_choice", "gpt-4o-mini")
-
-    llm = ChatOpenAI(
-        model=model_name,
-        temperature=0,
-        api_key=st_state["api_key"]
-    )
+    llm = ChatOpenAI(model=model_name, temperature=0, api_key=st_state["api_key"])
 
     start = time.time()
     response = llm.invoke(prompt)
@@ -68,14 +73,12 @@ def invoke_llm_tracked(prompt: str):
         output_tokens = len(str(getattr(response, "content", ""))) // 4
 
     total_tokens = input_tokens + output_tokens
-
     pricing = get_model_pricing(model_name)
     input_cost = input_tokens * pricing["input_per_1k"] / 1000
     output_cost = output_tokens * pricing["output_per_1k"] / 1000
     total_cost = input_cost + output_cost
 
     ensure_metrics_state()
-
     m = st_state["metrics"]
     m["tokens"] += total_tokens
     m["input_tokens"] += input_tokens
@@ -93,10 +96,6 @@ def invoke_llm_tracked(prompt: str):
 
     return response
 
-
-# ------------------------------
-# JSON HELPERS
-# ------------------------------
 def safe_json_parse(text):
     if not text:
         return {}
@@ -124,10 +123,6 @@ def safe_json_parse(text):
 
     return {"raw_output": text}
 
-
-# ------------------------------
-# EXTRACTION
-# ------------------------------
 def extract_structured_json(text, doc_type):
     clean_text = re.sub(r"[^\x00-\x7F]+", " ", text or "")
     clean_text = clean_text.replace("{", "").replace("}", "").strip()
@@ -282,7 +277,6 @@ DOCUMENT TEXT:
     try:
         response = invoke_llm_tracked(prompt).content.strip()
         response = response.replace("```json", "").replace("```", "").strip()
-
         parsed = safe_json_parse(response)
 
         if isinstance(parsed, list):
@@ -376,15 +370,8 @@ No explanation.
         return parsed
 
     except Exception as e:
-        return {
-            "error": "LLM request failed",
-            "details": str(e)[:300]
-        }
+        return {"error": "LLM request failed", "details": str(e)[:300]}
 
-
-# ------------------------------
-# RESUME SUMMARY
-# ------------------------------
 def generate_resume_summary(data):
     if "api_key" not in st_state:
         return "Summary not available"
@@ -406,16 +393,11 @@ STRICT RULES:
 CANDIDATE DATA:
 {json.dumps(data, ensure_ascii=False)}
 """
-
     try:
         return invoke_llm_tracked(prompt).content.strip()
     except Exception:
         return "Summary not available"
 
-
-# ------------------------------
-# RESUME BUILDER
-# ------------------------------
 def build_resume(data, template_file):
     def safe_str(value):
         return "" if value is None else str(value)
@@ -423,7 +405,6 @@ def build_resume(data, template_file):
     def format_date_range(start_date, end_date):
         start_date = safe_str(start_date).strip()
         end_date = safe_str(end_date).strip()
-
         if start_date and end_date:
             return f"{start_date} - {end_date}"
         if start_date:
@@ -440,12 +421,10 @@ def build_resume(data, template_file):
     def format_experience(experience):
         if not isinstance(experience, list) or not experience:
             return ""
-
         lines = []
         for exp in experience:
             if not isinstance(exp, dict):
                 continue
-
             role = safe_str(exp.get("role")).strip()
             company = safe_str(exp.get("company")).strip()
             location = safe_str(exp.get("location")).strip()
@@ -457,14 +436,11 @@ def build_resume(data, template_file):
             title_part = " - ".join([p for p in [role, company] if p])
             if title_part:
                 header_parts.append(title_part)
-
             date_range = format_date_range(start_date, end_date)
             if date_range:
                 header_parts.append(f"({date_range})")
-
             if location:
                 header_parts.append(location)
-
             if header_parts:
                 lines.append(" ".join(header_parts))
 
@@ -473,20 +449,16 @@ def build_resume(data, template_file):
                     item = safe_str(item).strip()
                     if item:
                         lines.append(f"- {item}")
-
             lines.append("")
-
         return "\n".join(lines).strip()
 
     def format_education(education):
         if not isinstance(education, list) or not education:
             return ""
-
         lines = []
         for edu in education:
             if not isinstance(edu, dict):
                 continue
-
             institution = safe_str(edu.get("institution")).strip()
             degree = safe_str(edu.get("degree")).strip()
             field = safe_str(edu.get("field_of_study")).strip()
@@ -502,18 +474,15 @@ def build_resume(data, template_file):
                 first_line_parts.append(degree_part)
             if institution:
                 first_line_parts.append(institution)
-
             if first_line_parts:
                 lines.append(" - ".join(first_line_parts))
 
             date_text = graduation_date if graduation_date else format_date_range(start_date, end_date)
-
             second_line_parts = []
             if date_text:
                 second_line_parts.append(date_text)
             if location:
                 second_line_parts.append(location)
-
             if second_line_parts:
                 lines.append(", ".join(second_line_parts))
 
@@ -522,20 +491,16 @@ def build_resume(data, template_file):
                     item = safe_str(item).strip()
                     if item:
                         lines.append(f"- {item}")
-
             lines.append("")
-
         return "\n".join(lines).strip()
 
     def format_certifications(certifications):
         if not isinstance(certifications, list) or not certifications:
             return ""
-
         lines = []
         for cert in certifications:
             if not isinstance(cert, dict):
                 continue
-
             name = safe_str(cert.get("name")).strip()
             issuer = safe_str(cert.get("issuer")).strip()
             date = safe_str(cert.get("date")).strip()
@@ -546,7 +511,6 @@ def build_resume(data, template_file):
                 line_parts.append(name)
             if issuer:
                 line_parts.append(issuer)
-
             line = " - ".join(line_parts)
 
             date_bits = []
@@ -557,21 +521,17 @@ def build_resume(data, template_file):
 
             if date_bits:
                 line = f"{line} ({', '.join(date_bits)})" if line else ", ".join(date_bits)
-
             if line:
                 lines.append(line)
-
         return "\n".join(lines).strip()
 
     def format_projects(projects):
         if not isinstance(projects, list) or not projects:
             return ""
-
         lines = []
         for proj in projects:
             if not isinstance(proj, dict):
                 continue
-
             name = safe_str(proj.get("name")).strip()
             role = safe_str(proj.get("role")).strip()
             start_date = safe_str(proj.get("start_date")).strip()
@@ -582,11 +542,9 @@ def build_resume(data, template_file):
             title = " - ".join([p for p in [name, role] if p])
             if title:
                 header_parts.append(title)
-
             date_range = format_date_range(start_date, end_date)
             if date_range:
                 header_parts.append(f"({date_range})")
-
             if header_parts:
                 lines.append(" ".join(header_parts))
 
@@ -595,9 +553,7 @@ def build_resume(data, template_file):
                     item = safe_str(item).strip()
                     if item:
                         lines.append(f"- {item}")
-
             lines.append("")
-
         return "\n".join(lines).strip()
 
     def replace_placeholders_in_paragraph(paragraph, placeholders):
@@ -663,20 +619,12 @@ def build_resume(data, template_file):
     doc.save(buffer)
     return buffer.getvalue()
 
-
-# ------------------------------
-# FILE HELPERS
-# ------------------------------
 def save_temp_file(uploaded_file):
     suffix = Path(uploaded_file.name).suffix
     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
         tmp.write(uploaded_file.getvalue())
         return tmp.name
 
-
-# ------------------------------
-# DOC TYPE DETECTION
-# ------------------------------
 def detect_document_type(text):
     if "api_key" not in st_state:
         return "other"
@@ -698,28 +646,20 @@ STRICT RULES:
 
 {text[:2000]}
 """
-
     try:
         raw = invoke_llm_tracked(prompt).content.lower().strip()
     except Exception:
         return "other"
 
     labels = ["resume", "invoice", "receipt", "report", "ticket", "other"]
-
     for label in labels:
         if label == raw:
             return label
-
     for label in labels:
         if label in raw:
             return label
-
     return "other"
 
-
-# ------------------------------
-# DATA EXPORT HELPERS
-# ------------------------------
 def json_to_kv_dataframe(data):
     rows = []
 
@@ -738,7 +678,6 @@ def json_to_kv_dataframe(data):
 
     flatten("", data if data is not None else {})
     return pd.DataFrame(rows)
-
 
 def generate_excel(df):
     output = BytesIO()
