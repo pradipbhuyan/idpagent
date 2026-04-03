@@ -310,13 +310,25 @@ def refresh_live_activity():
     events = st.session_state.get("agent_events", [])
     logs = st.session_state.get("agent_logs", [])
 
+    has_started = len(events) > 0 or progress_value > 0 or current_step != "Waiting for upload"
+
     if step_placeholder is not None:
-        step_placeholder.markdown(f"#### Progress\n\n**Current Step:** {current_step}")
+        if has_started:
+            step_placeholder.markdown(f"#### Progress\n\n**Current Step:** {current_step}")
+        else:
+            step_placeholder.empty()
 
     if progress_placeholder is not None:
-        progress_placeholder.progress(progress_value)
+        if has_started:
+            progress_placeholder.progress(progress_value)
+        else:
+            progress_placeholder.empty()
 
     if event_placeholder is not None:
+        if not has_started:
+            event_placeholder.empty()
+            return
+
         content = ["#### Completed Steps"]
 
         real_events = [
@@ -324,25 +336,21 @@ def refresh_live_activity():
             if e.get("step") and e.get("step").strip().lower() != "waiting for upload"
         ]
 
-        if real_events:
-            for event in real_events[-8:]:
-                status = event.get("status", "pending")
-                if status == "done":
-                    icon = "✅"
-                elif status == "error":
-                    icon = "❌"
-                elif status == "running":
-                    icon = "🔄"
-                else:
-                    icon = "⏳"
+        for event in real_events[-8:]:
+            status = event.get("status", "pending")
+            if status == "done":
+                icon = "✅"
+            elif status == "error":
+                icon = "❌"
+            elif status == "running":
+                icon = "🔄"
+            else:
+                icon = "⏳"
 
-                line = f"{icon} **{event.get('step', '')}**"
-                if event.get("message"):
-                    line += f"  \n{event.get('message')}"
-                content.append(line)
-        else:
-            if current_step == "Waiting for upload":
-                content.append("_No steps yet_")
+            line = f"{icon} **{event.get('step', '')}**"
+            if event.get("message"):
+                line += f"  \n{event.get('message')}"
+            content.append(line)
 
         if logs:
             content.append("---")
