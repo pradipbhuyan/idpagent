@@ -1251,12 +1251,13 @@ uploaded_file = render_upload_controls()
 left_col, right_col = st.columns([1, 1.6], gap="large")
 
 with left_col:
-    init_live_progress_placeholders()
+    activity_container = st.container()
 
-    st.markdown("### Activity")
-    st.session_state["live_step_placeholder"] = st.empty()
-    st.session_state["live_progress_placeholder"] = st.empty()
-    st.session_state["live_event_placeholder"] = st.empty()
+    with activity_container:
+        st.markdown("### Activity")
+        st.session_state["live_step_placeholder"] = st.empty()
+        st.session_state["live_progress_placeholder"] = st.empty()
+        st.session_state["live_event_placeholder"] = st.empty()
 
     refresh_live_activity()
 
@@ -1267,10 +1268,11 @@ with left_col:
             reset_document_state()
             st.session_state.file_hash = file_hash
 
-            st.markdown("### Activity")
-            st.session_state["live_step_placeholder"] = st.empty()
-            st.session_state["live_progress_placeholder"] = st.empty()
-            st.session_state["live_event_placeholder"] = st.empty()
+            # recreate placeholders without rendering a second Activity header
+            with activity_container:
+                st.session_state["live_step_placeholder"] = st.empty()
+                st.session_state["live_progress_placeholder"] = st.empty()
+                st.session_state["live_event_placeholder"] = st.empty()
 
             refresh_live_activity()
 
@@ -1290,7 +1292,7 @@ with left_col:
                 refresh_live_activity()
                 st.error(str(e))
                 st.code(traceback.format_exc())
-
+                
 with right_col:
     render_result_workspace()
 
