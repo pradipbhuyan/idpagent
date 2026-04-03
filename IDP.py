@@ -912,8 +912,8 @@ def render_upload_controls():
         st.session_state["model_choice"] = model_choice
 
         st.markdown("---")
-        st.write("🔑 API key loaded securely")
-
+        st.success("🔑 API key loaded securely")
+        
         cost = st.session_state.get("metrics", {}).get("cost", 0.0)
         st.write(f"💰 Session Cost ${round(cost, 6)}")
 
