@@ -739,3 +739,106 @@ def send_to_concur(doc_type, data, mode="mock"):
         "next_status": "Awaiting downstream processing",
         "payload": payload
     }
+
+def confidence_label(score):
+    if score >= 0.85:
+        return "High"
+    if score >= 0.6:
+        return "Medium"
+    return "Low"
+
+
+def build_confidence_map(data, doc_type):
+    if not isinstance(data, dict):
+        return {}
+
+    def score_scalar(value, strong=False):
+        if value in [None, "", [], {}]:
+            return {
+                "score": 0.2,
+                "label": "Low",
+                "reason": "Missing or empty field"
+            }
+
+        if strong:
+            score = 0.9
+            reason = "Looks like an explicit field match"
+        else:
+            score = 0.7
+            reason = "Extracted successfully but may need review"
+
+        return {
+            "score": score,
+            "label": confidence_label(score),
+            "reason": reason
+        }
+
+    confidence = {}
+
+    if doc_type == "invoice":
+        for field in ["vendor", "invoice_number", "invoice_date", "total", "currency", "due_date"]:
+            val = data.get(field) or data.get(field.replace("invoice_number", "invoice_no"))
+            confidence[field] = score_scalar(val, strong=field in ["invoice_number", "total"])
+
+    elif doc_type == "ticket":
+        for field in ["traveler_name", "ticket_number", "airline", "from", "to", "departure_date", "amount"]:
+            confidence[field] = score_scalar(data.get(field), strong=field in ["ticket_number", "departure_date"])
+
+    elif doc_type == "resume":
+        for field in ["name", "email", "phone", "location", "summary"]:
+            confidence[field] = score_scalar(data.get(field), strong=field in ["name", "email"])
+
+        confidence["experience"] = score_scalar(data.get("experience"), strong=True)
+        confidence["education"] = score_scalar(data.get("education"), strong=True)
+
+    return confidence
+
+
+def validate_document_data(data, doc_type):
+    issues = []
+    warnings = []
+
+    if not isinstance(data, dict):
+        return {
+            "passed": False,
+            "issues": ["No structured data available"],
+            "warnings": []
+        }
+
+    if doc_type == "invoice":
+        if not (data.get("vendor") or data.get("supplier")):
+            issues.append("Vendor is missing")
+        if not (data.get("invoice_number") or data.get("invoice_no")):
+            issues.append("Invoice number is missing")
+        if not data.get("invoice_date"):
+            issues.append("Invoice date is missing")
+        if not data.get("total"):
+            issues.append("Total amount is missing")
+
+    elif doc_type == "ticket":
+        if not data.get("traveler_name"):
+            issues.append("Traveler name is missing")
+        if not data.get("ticket_number"):
+            issues.append("Ticket number is missing")
+        if not data.get("from") or not data.get("to"):
+            issues.append("Route is incomplete")
+        if not data.get("departure_date"):
+            issues.append("Departure date is missing")
+        if not data.get("amount"):
+            warnings.append("Amount is missing")
+
+    elif doc_type == "resume":
+        if not data.get("name"):
+            issues.append("Candidate name is missing")
+        if not data.get("experience"):
+            issues.append("Experience section is missing")
+        if not data.get("education"):
+            warnings.append("Education section is missing")
+        if not data.get("skills"):
+            warnings.append("Skills section is missing")
+
+    return {
+        "passed": len(issues) == 0,
+        "issues": issues,
+        "warnings": warnings,
+    }
