@@ -311,15 +311,14 @@ def refresh_live_activity():
     logs = st.session_state.get("agent_logs", [])
 
     if step_placeholder is not None:
-        step_placeholder.info(f"Current Step: {current_step}")
+        step_placeholder.markdown(f"#### Progress\n\n**Current Step:** {current_step}")
 
     if progress_placeholder is not None:
         progress_placeholder.progress(progress_value)
 
     if event_placeholder is not None:
-        content = []
+        content = ["#### Completed Steps"]
 
-        # Show event history only if we actually have real events
         real_events = [
             e for e in events
             if e.get("step") and e.get("step").strip().lower() != "waiting for upload"
@@ -342,9 +341,8 @@ def refresh_live_activity():
                     line += f"  \n{event.get('message')}"
                 content.append(line)
         else:
-            # Only show this when absolutely nothing has started yet
             if current_step == "Waiting for upload":
-                content.append("⏳ **Waiting for upload**")
+                content.append("_No steps yet_")
 
         if logs:
             content.append("---")
@@ -352,8 +350,8 @@ def refresh_live_activity():
             for log in logs[-5:]:
                 content.append(f"- {log}")
 
-        event_placeholder.markdown("\n\n".join(content) if content else "")
-
+        event_placeholder.markdown("\n\n".join(content))
+        
 def update_progress(percent, message):
     st.session_state["progress_value"] = percent
     st.session_state["current_step"] = message
@@ -1307,7 +1305,6 @@ with left_col:
             reset_document_state()
             st.session_state.file_hash = file_hash
 
-            # recreate placeholders without rendering a second Activity header
             with activity_container:
                 st.session_state["live_step_placeholder"] = st.empty()
                 st.session_state["live_progress_placeholder"] = st.empty()
