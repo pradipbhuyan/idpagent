@@ -898,10 +898,8 @@ def render_header():
 
 def render_upload_controls():
     with st.sidebar:
-        st.markdown("### User")
+        st.markdown("### Account")
         st.write(f"**{st.session_state['user']}**")
-        st.caption(st.session_state["role"])
-        st.success("API key loaded")
 
         st.markdown("### Model")
         model_choice = st.selectbox(
@@ -913,15 +911,19 @@ def render_upload_controls():
         )
         st.session_state["model_choice"] = model_choice
 
+        st.markdown("---")
+        st.write("🔑 API key loaded securely")
+
+        cost = st.session_state.get("metrics", {}).get("cost", 0.0)
+        st.write(f"💰 Session Cost ${round(cost, 6)}")
+
+        st.markdown("---")
+
         if st.button("Logout", use_container_width=True):
             for key in ["logged_in", "user", "role", "api_key"]:
                 if key in st.session_state:
                     del st.session_state[key]
             st.rerun()
-
-        st.markdown("---")
-        cost = st.session_state.get("metrics", {}).get("cost", 0.0)
-        st.write(f"Session Cost ${round(cost, 6)}")
 
     c1, c2 = st.columns([6, 1], gap="small")
     with c1:
