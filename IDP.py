@@ -898,7 +898,7 @@ def render_header():
 
 def render_upload_controls():
     with st.sidebar:
-        st.markdown("### Account")
+        st.markdown("### Account User")
         st.write(f"**{st.session_state['user']}**")
 
         st.markdown("### Model")
@@ -914,6 +914,7 @@ def render_upload_controls():
         st.markdown("---")
         st.success("🔑 API key loaded securely")
         
+        st.markdown("---")
         cost = st.session_state.get("metrics", {}).get("cost", 0.0)
         st.write(f"💰 Session Cost ${round(cost, 6)}")
 
