@@ -305,15 +305,54 @@ def refresh_live_activity():
     progress_placeholder = st.session_state.get("live_progress_placeholder")
     event_placeholder = st.session_state.get("live_event_placeholder")
 
+    current_step = st.session_state.get("current_step", "Waiting for upload")
+    progress_value = int(st.session_state.get("progress_value", 0))
+    events = st.session_state.get("agent_events", [])
+    logs = st.session_state.get("agent_logs", [])
+
     if step_placeholder is not None:
-        step_placeholder.info(f"Current Step: {st.session_state.get('current_step', 'Waiting for upload')}")
+        step_placeholder.info(f"Current Step: {current_step}")
 
     if progress_placeholder is not None:
-        progress_placeholder.progress(int(st.session_state.get("progress_value", 0)))
+        progress_placeholder.progress(progress_value)
 
     if event_placeholder is not None:
-        event_placeholder.markdown(render_live_activity_snapshot())
+        content = []
 
+        # Show event history only if we actually have real events
+        real_events = [
+            e for e in events
+            if e.get("step") and e.get("step").strip().lower() != "waiting for upload"
+        ]
+
+        if real_events:
+            for event in real_events[-8:]:
+                status = event.get("status", "pending")
+                if status == "done":
+                    icon = "✅"
+                elif status == "error":
+                    icon = "❌"
+                elif status == "running":
+                    icon = "🔄"
+                else:
+                    icon = "⏳"
+
+                line = f"{icon} **{event.get('step', '')}**"
+                if event.get("message"):
+                    line += f"  \n{event.get('message')}"
+                content.append(line)
+        else:
+            # Only show this when absolutely nothing has started yet
+            if current_step == "Waiting for upload":
+                content.append("⏳ **Waiting for upload**")
+
+        if logs:
+            content.append("---")
+            content.append("**Recent Logs**")
+            for log in logs[-5:]:
+                content.append(f"- {log}")
+
+        event_placeholder.markdown("\n\n".join(content) if content else "")
 
 def update_progress(percent, message):
     st.session_state["progress_value"] = percent
