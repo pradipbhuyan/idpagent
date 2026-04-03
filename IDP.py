@@ -900,6 +900,7 @@ def render_upload_controls():
     with st.sidebar:
         st.markdown("### Account User")
         st.write(f"**{st.session_state['user']}**")
+        st.markdown("---")
 
         st.markdown("### Model")
         model_choice = st.selectbox(
