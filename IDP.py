@@ -845,6 +845,7 @@ def regenerate_resume_from_review():
 # ------------------------------
 # UI RENDERERS
 # ------------------------------
+
 def render_header():
     logo_path = Path(__file__).parent / "IDP-Logo1.png"
     col_logo, col_title = st.columns([1, 6], gap="small")
@@ -904,6 +905,9 @@ def render_upload_controls():
 
 
 def render_agent_activity_panel():
+    """
+    Kept for compatibility, but not used in the live layout below.
+    """
     st.markdown("### Activity")
     st.caption(st.session_state.get("current_step", "Waiting"))
     st.progress(st.session_state.get("progress_value", 0))
@@ -1237,6 +1241,7 @@ def render_details_section():
     with st.expander("Metrics", expanded=False):
         render_metrics_section()
 
+
 # ------------------------------
 # MAIN
 # ------------------------------
@@ -1247,10 +1252,12 @@ left_col, right_col = st.columns([1, 1.6], gap="large")
 
 with left_col:
     init_live_progress_placeholders()
+
     st.markdown("### Activity")
     st.session_state["live_step_placeholder"] = st.empty()
     st.session_state["live_progress_placeholder"] = st.empty()
     st.session_state["live_event_placeholder"] = st.empty()
+
     refresh_live_activity()
 
     if uploaded_file:
@@ -1260,16 +1267,16 @@ with left_col:
             reset_document_state()
             st.session_state.file_hash = file_hash
 
-            # Recreate placeholders after reset
-            init_live_progress_placeholders()
             st.markdown("### Activity")
             st.session_state["live_step_placeholder"] = st.empty()
             st.session_state["live_progress_placeholder"] = st.empty()
             st.session_state["live_event_placeholder"] = st.empty()
+
             refresh_live_activity()
 
             try:
                 process_uploaded_document(uploaded_file)
+                refresh_live_activity()
             except Exception as e:
                 st.session_state.processing_error = str(e)
                 st.session_state.agent_status = "Failed"
@@ -1280,11 +1287,9 @@ with left_col:
                 )
                 push_agent_log(f"Error: {str(e)}")
                 record_agent_event("Processing failed", "error", str(e))
+                refresh_live_activity()
                 st.error(str(e))
                 st.code(traceback.format_exc())
-
-    # final rendered panel
-    render_agent_activity_panel()
 
 with right_col:
     render_result_workspace()
